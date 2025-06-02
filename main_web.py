@@ -273,15 +273,15 @@ async def transaction_stream(request: Request):
     }
     return StreamingResponse(sse_transaction_generator(request), media_type="text/event-stream", headers=sse_headers)
 
+# In main_web.py
 @app.get("/", response_class=FileResponse)
 async def read_index():
-    html_file_name = "index_optimized.html" 
+    html_file_name = "index.html" # CHANGED to index.html as primary
     html_file_path = os.path.join(os.path.dirname(__file__), "static", html_file_name)
+
     if not os.path.exists(html_file_path):
-        html_file_path_fallback = os.path.join(os.path.dirname(__file__), "static", "index.html")
-        if not os.path.exists(html_file_path_fallback):
-            return HTMLResponse(content=f"<html><body><h1>Error 404: {html_file_name} or index.html not found.</h1></body></html>", status_code=404)
-        return FileResponse(html_file_path_fallback)
+        # You could have a more specific error if index.html itself is mandatory
+        return HTMLResponse(content=f"<html><body><h1>Error 404: {html_file_name} not found in static folder.</h1><p>Please ensure 'static/{html_file_name}' exists.</p></body></html>", status_code=404)
     return FileResponse(html_file_path)
 
 if __name__ == "__main__":

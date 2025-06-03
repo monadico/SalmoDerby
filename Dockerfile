@@ -73,10 +73,8 @@ RUN pip install --no-cache-dir --upgrade pip && \
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy your main FastAPI application file
-# ***** IMPORTANT: Change 'main_web.py' if your file is named 'main_web_optimized.py' *****
-COPY main_web.py ./ 
-# If your file is main_web_optimized.py, use:
-# COPY main_web_optimized.py ./
+# ***** ENSURING THIS MATCHES THE ERROR LOG *****
+COPY main_web_optimized.py ./ 
 
 # The 'static' folder is for your Vercel frontend, so it's NOT copied into this backend Docker image.
 # The .env file should NOT be copied; set environment variables in Render's UI.
@@ -89,5 +87,5 @@ EXPOSE 8000
 # This command will be executed when the container starts if Render's "Start Command" UI field is blank.
 # It uses 'sh -c' and provides a default for $PORT if it's unset or empty.
 # Render typically uses port 10000 for services.
-# ***** IMPORTANT: Change 'main_web:app' if your Python file or FastAPI app instance is named differently *****
+# ***** ENSURING THIS MATCHES THE ERROR LOG *****
 CMD sh -c 'uvicorn main_web_optimized:app --host 0.0.0.0 --port "${PORT:-10000}"'

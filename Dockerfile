@@ -48,7 +48,6 @@ COPY pyproject.toml ./
 COPY Cargo.toml ./
 COPY Cargo.lock ./
 # If you use poetry.lock or poetry.toml and they are essential for the hypersync build, copy them.
-# Otherwise, these can be omitted if pyproject.toml + Cargo.toml are sufficient for maturin.
 # COPY poetry.lock ./
 # COPY poetry.toml ./ 
 COPY README.md ./ 
@@ -87,7 +86,7 @@ COPY main_web.py ./
 EXPOSE 8000 
 
 # --- Default command to run the application ---
-# This command will be executed when the container starts.
+# This command will be executed when the container starts if Render's "Start Command" UI field is blank.
 # It uses 'sh -c' to ensure shell expansion of $PORT.
 # ***** IMPORTANT: Change 'main_web:app' if your Python file or FastAPI app instance is named differently *****
-CMD sh -c 'uvicorn main_web:app --host 0.0.0.0 --port "$PORT"'
+CMD sh -c 'uvicorn main_web_optimized:app --host 0.0.0.0 --port "$PORT"'

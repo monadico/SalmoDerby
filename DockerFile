@@ -1,0 +1,77 @@
+# Start with an official Python base image.
+# Using 3.12-slim as your venv indicated python3.12. Use a specific version for consistency.
+FROM python:3.12-slim
+
+# Set environment variables for non-interactive apt-get and Python
+ENV PYTHONUNBUFFERED 1
+ENV DEBIAN_FRONTEND=noninteractive
+ENV LANG C.UTF-8
+ENV LC_ALL C.UTF-8
+
+# Install system dependencies required for building hypersync and its Rust dependencies
+# - capnproto: For compiling Cap'n Proto schemas (hypersync-net-types dependency)
+# - patchelf: To resolve warnings during maturin build and set rpath
+# - curl: To install Rust via rustup
+# - build-essential: Common C/C++ build tools (gcc, g++, make)
+# - pkg-config: Helps find system libraries
+# - libssl-dev: For Rust crates that use OpenSSL
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    capnproto \
+    patchelf \
+    curl \
+    build-essential \
+    pkg-config \
+    libssl-dev && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install Rust using rustup (official method)
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+# Add Rust's cargo bin directory to PATH for subsequent RUN commands
+# Note: The user in a python:slim image is root.
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+# Set the working directory inside the container
+WORKDIR /app
+
+# Set CARGO_HOME to a writable directory within the image (inside /app)
+# This ensures Cargo uses this path for its caches and Git dependency checkouts,
+# avoiding attempts to write to read-only system paths.
+ENV CARGO_HOME=/app/.cargo_cache 
+RUN mkdir -p $CARGO_HOME
+
+# Copy files necessary for building the `hypersync` package first.
+# This takes advantage of Docker layer caching if these files don't change often.
+COPY pyproject.toml poetry.lock poetry.toml Cargo.toml Cargo.lock README.md LICENSE ./
+# If your Rust source is in an 'src' directory at the project root
+COPY src/ ./src/
+# If the Python part of the hypersync package is in a 'hypersync' subdirectory
+COPY hypersync/ ./hypersync/
+
+# Copy your application's requirements file
+COPY requirements.txt ./
+
+# Ensure pip is up-to-date and then install hypersync in editable mode from local source
+# This will compile the Rust components. `capnp` and `patchelf` should now be found.
+# The `CARGO_HOME` environment variable will be respected by cargo/maturin.
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -e .
+
+# Install other Python dependencies for your FastAPI application
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy the rest of your application code (your main Python script, e.g., main_web.py)
+# Adjust "main_web.py" if your main Python application file has a different name.
+COPY main_web.py ./
+# If you have other Python modules specific to your backend (not part of the hypersync lib), COPY them here too.
+# The 'static' folder is for your Vercel frontend, so we generally don't need to copy it here for the backend image.
+
+# Render provides the PORT environment variable at runtime.
+# The CMD to run your application will typically be set in Render's "Start Command" UI field.
+# However, EXPOSE is good practice to document the port the application inside the container listens on.
+EXPOSE 8000
+
+# You don't strictly need a CMD here if you set the Start Command in Render's UI.
+# If you were to set it here, it would be something like:
+# CMD ["uvicorn", "main_web:app", "--host", "0.0.0.0", "--port", "8000"]
+# But Render will inject $PORT, so using Render's Start Command field is more flexible.

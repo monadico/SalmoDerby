@@ -1,0 +1,5 @@
+
+[phases.setup]
+
+aptPkgs = ["capnproto", "patchelf", "pkg-config", "libssl-dev", "build-essential", "curl"]
+

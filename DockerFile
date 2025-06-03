@@ -72,7 +72,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy your main FastAPI application file
 # Make sure this matches YOUR Python script name!
-COPY main_web.py ./ 
+COPY main_web_optimized.py ./ 
 # If your file is main_web_optimized.py, use:
 # COPY main_web_optimized.py ./
 

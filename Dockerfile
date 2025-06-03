@@ -7,12 +7,14 @@ ENV PYTHONUNBUFFERED 1
 ENV DEBIAN_FRONTEND=noninteractive
 ENV LANG C.UTF-8
 ENV LC_ALL C.UTF-8
+# Ensures pip installs packages to a path that's generally available
+# and doesn't complain about running as root (common in Docker)
 ENV PIP_USER=0 
 ENV PIP_ROOT_USER_ACTION=ignore
 
 # Install system dependencies required for building hypersync and its Rust dependencies
-# - capnproto: For compiling Cap'n Proto schemas
-# - patchelf: To resolve warnings during maturin build
+# - capnproto: For compiling Cap'n Proto schemas (hypersync-net-types dependency)
+# - patchelf: To resolve warnings during maturin build and set rpath
 # - curl: To install Rust via rustup
 # - build-essential: Common C/C++ build tools (gcc, g++, make)
 # - pkg-config, libssl-dev: Common for Rust networking/crypto crates
@@ -26,7 +28,7 @@ RUN apt-get update && \
     libssl-dev && \
     rm -rf /var/lib/apt/lists/*
 
-# Install Rust using rustup
+# Install Rust using rustup (official method)
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
 # Add Rust's cargo bin directory to PATH for the root user (default user in python:slim)
 ENV PATH="/root/.cargo/bin:${PATH}"
@@ -45,7 +47,7 @@ COPY pyproject.toml ./
 # Copy Cargo.toml and Cargo.lock for Rust dependencies
 COPY Cargo.toml ./
 COPY Cargo.lock ./
-# If you use poetry.lock or poetry.toml and they are essential for the build, copy them.
+# If you use poetry.lock or poetry.toml and they are essential for the hypersync build, copy them.
 # Otherwise, these can be omitted if pyproject.toml + Cargo.toml are sufficient for maturin.
 # COPY poetry.lock ./
 # COPY poetry.toml ./ 
@@ -55,7 +57,7 @@ COPY LICENSE ./
 # Copy the Rust source code (typically in an 'src' directory at the project root)
 COPY src/ ./src/
 # Copy the Python part of the hypersync package (typically in a 'hypersync' directory)
-# This directory must contain the comprehensive __init__.py file.
+# This directory must contain the comprehensive __init__.py file that correctly exports names.
 COPY hypersync/ ./hypersync/
 
 # --- Application specific files ---
@@ -64,6 +66,7 @@ COPY requirements.txt ./
 
 # Ensure pip is up-to-date, then build and install your local `hypersync` package
 # This will compile the Rust components. `capnp` and `patchelf` should now be found.
+# The `CARGO_HOME` environment variable will be respected by cargo/maturin.
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -e .
 
@@ -71,8 +74,8 @@ RUN pip install --no-cache-dir --upgrade pip && \
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy your main FastAPI application file
-# Make sure this matches YOUR Python script name!
-COPY main_web_optimized.py ./ 
+# ***** IMPORTANT: Change 'main_web.py' if your file is named 'main_web_optimized.py' *****
+COPY main_web.py ./ 
 # If your file is main_web_optimized.py, use:
 # COPY main_web_optimized.py ./
 
@@ -83,5 +86,8 @@ COPY main_web_optimized.py ./
 # EXPOSE is good practice to document the port.
 EXPOSE 8000 
 
-# The actual command to run your app will be set in Render's "Start Command" UI field.
-# Example: uvicorn main_web:app --host 0.0.0.0 --port $PORT
+# --- Default command to run the application ---
+# This command will be executed when the container starts.
+# It uses 'sh -c' to ensure shell expansion of $PORT.
+# ***** IMPORTANT: Change 'main_web:app' if your Python file or FastAPI app instance is named differently *****
+CMD sh -c 'uvicorn main_web:app --host 0.0.0.0 --port "$PORT"'

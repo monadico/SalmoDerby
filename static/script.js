@@ -292,13 +292,13 @@ function resizeCanvasAndWebGLContext() {
     }
 }
 
-let lastFrameTimeMs = 0;
+let lastFrameTimeMs = 0; 
 function renderLoop(currentTimeMs) { 
     animationId = requestAnimationFrame(renderLoop); 
     if (!gl || !particleSystem || !program) return;
     resizeCanvasAndWebGLContext(); 
     frameCount++;
-    const nowMs = performance.now();
+    const nowMs = performance.now(); 
     if (nowMs - lastFPSTime >= 1000) { currentFPS = frameCount; lastFPSTime = nowMs; frameCount = 0; }
     gl.clearColor(0.0, 0.0, 0.0, 0.0); 
     gl.clear(gl.COLOR_BUFFER_BIT);
@@ -330,7 +330,6 @@ canvas.addEventListener('click', function(event) {
             const particleX_css = particleSystem.positions[i * 2]; 
             const particleY_css = particleSystem.positions[i * 2 + 1];
             
-            // Approximate visual size for click radius.
             const age = performance.now() - particleSystem.birthTimes[i];
             let currentVisualSizeFactor = 0;
             if (age <= PARTICLE_LIFESPAN_MS) {
@@ -343,7 +342,10 @@ canvas.addEventListener('click', function(event) {
                 }
                 currentVisualSizeFactor = Math.max(0.0, currentVisualSizeFactor);
             }
-            const clickRadius = particleSystem.sizes[i] * currentVisualSizeFactor * 25.0 * 0.5 / (window.devicePixelRatio || 1); // Approx half of gl_PointSize in CSS px
+            // Approximate visual size for click radius. gl_PointSize is in pixels.
+            // We need to scale it down by dpr if click coords are CSS pixels.
+            const visualPointSize = particleSystem.sizes[i] * currentVisualSizeFactor * 25.0;
+            const clickRadius = (visualPointSize / (window.devicePixelRatio || 1)) * 0.5; // Approx half of visual size in CSS pixels
 
             const dx = clickX_css - particleX_css;
             const dy = clickY_css - particleY_css;
@@ -372,31 +374,38 @@ function init() {
     console.log('High-performance WebGL particle system ready.');
 }
 
-const eventSource = new EventSource('https://monad-visualizer-optimized-uv8q.onrender.com');
+const eventSource = new EventSource('/transaction-stream');
 
 eventSource.onopen = function() {
     console.log(`JS: SSE Stream connected. Listening for '${SSE_BATCH_EVENT_NAME}' events...`);
 };
 
-// MODIFIED TO HANDLE BATCHED EVENTS
+// This listener handles the "new_transactions_batch" event from the Python backend
 eventSource.addEventListener(SSE_BATCH_EVENT_NAME, function(event) {
     // console.log("JS: Received raw data for batch event:", event.data); 
     try {
-        const txBatch = JSON.parse(event.data);
+        const txBatch = JSON.parse(event.data); // Data is an array
         // console.log("JS: Parsed txBatch:", txBatch); 
 
         if (Array.isArray(txBatch)) {
             // console.log(`JS: Processing batch of ${txBatch.length} transactions.`);
             for (const txData of txBatch) {
                 if (particleSystem && typeof particleSystem.addParticle === 'function') {
-                    transactionTimestamps.push(Date.now());
+                    transactionTimestamps.push(Date.now()); // For TPS, count each actual transaction
                     particleSystem.addParticle(txData); 
                 } else {
                      console.error("JS ERROR: particleSystem not initialized or addParticle is not a function!");
                 }
             }
         } else {
-             console.error("JS ERROR: Received non-array data for batch event. Data:", txBatch);
+             // This case handles if the backend accidentally sends a single object instead of a batch
+             if (particleSystem && typeof txBatch === 'object' && txBatch !== null && txBatch.hash) {
+                 console.warn("JS WARNING: Received single object instead of batch for batch event. Processing it.", txBatch);
+                 transactionTimestamps.push(Date.now());
+                 particleSystem.addParticle(txBatch);
+             } else {
+                console.error("JS ERROR: Received non-array/non-object data for batch event. Data:", txBatch);
+             }
         }
     } catch (e) {
         console.error("JS ERROR: Failed to parse or process transaction batch data:", e, "Problematic data was:", event.data);

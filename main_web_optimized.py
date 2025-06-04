@@ -14,17 +14,19 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 import uvicorn
-# --- Add this for CORS ---
-from fastapi.middleware.cors import CORSMiddleware
 
-# --- Configuration (from your "Optimization Report" based script) ---
+# --- Configuration ---
 load_dotenv()
 MONAD_HYPERSYNC_URL = "https://monad-testnet.hypersync.xyz"
 
-# Adaptive Polling Constants
+# OPTIMIZED POLLING CONFIGURATION
+# Adaptive polling intervals based on activity
 TIP_POLL_INTERVAL_BASE = 0.2  
 TIP_POLL_INTERVAL_FAST = 0.1  
 TIP_POLL_INTERVAL_SLOW = 0.5  
+# --- ADDED MISSING CONSTANT DEFINITION ---
+CONSECUTIVE_EMPTY_QUERIES_FOR_SLOW_POLL = 5 # Number of empty tip queries before slowing down polling
+# --- END ADDED CONSTANT ---
 BACKLOG_POLL_INTERVAL_SECONDS = 0.03  
 ERROR_RETRY_DELAY_SECONDS = 3  
 
@@ -34,19 +36,16 @@ TIP_QUERY_RANGE_ACTIVE = 3
 TIP_QUERY_RANGE_INACTIVE = 2  
 MAX_CATCH_UP_BATCH_SIZE = 50  
 
-# Height refresh strategy
+# Height refresh strategy - more intelligent timing
 GET_HEIGHT_REFRESH_FAST_INTERVAL = 1.0  
 GET_HEIGHT_REFRESH_SLOW_INTERVAL = 3.0  
-GET_HEIGHT_REFRESH_ON_EMPTY_QUERIES = 2  # Corrected constant name from user's script
+GET_HEIGHT_REFRESH_ON_EMPTY_QUERIES = 2  
 
 # Queue configuration
-TRANSACTION_QUEUE_MAX_SIZE = 8000
-TRANSACTION_QUEUE = asyncio.Queue(maxsize=TRANSACTION_QUEUE_MAX_SIZE) 
-
-# Processed Hashes Cache
+TRANSACTION_QUEUE = asyncio.Queue(maxsize=8000)  
 PROCESSED_TX_HASHES = set()
-MAX_PROCESSED_TX_HASHES_SIZE = 50000  # Corrected constant name from user's script
-PROCESSED_TX_HASHES_ORDER_DEQUE = deque() 
+MAX_PROCESSED_TX_HASHES_SIZE = 50000 # Renamed from MAX_PROCESSED_TX_HASHES for consistency
+PROCESSED_TX_HASHES_ORDER_DEQUE = deque() # For LRU eviction
 
 # SSE Configuration
 SSE_EVENT_NAME = "new_transactions_batch"
@@ -56,7 +55,7 @@ SSE_KEEP_ALIVE_TIMEOUT = 20.0
 
 hypersync_client: hypersync.HypersyncClient | None = None
 poller_start_block = 0
-loop_iteration_count = 0 # Define globally for print_poller_log
+loop_iteration_count = 0 # Global for print_poller_log
 
 # Helper print functions
 def print_general_red(msg, file=sys.stderr): print(f"\033[91mERROR: {msg}\033[0m", file=file, flush=True)
@@ -64,8 +63,8 @@ def print_general_yellow(msg, file=sys.stderr): print(f"\033[93mWARNING: {msg}\0
 def print_general_info(msg_prefix, message, file=sys.stderr): print(f"{msg_prefix.upper()} INFO: {message}", file=file, flush=True)
 def print_poller_log(log_type, iter_count, message, file=sys.stderr):
     color_code = ""
-    if log_type.upper() == "ERROR": color_code = "\033[91m" 
-    elif log_type.upper() == "WARNING": color_code = "\033[93m" 
+    if log_type.upper() == "ERROR": color_code = "\033[91m"
+    elif log_type.upper() == "WARNING": color_code = "\033[93m"
     end_color_code = "\033[0m" if color_code else ""
     print(f"{color_code}BG POLLER {log_type.upper()} (Iter: {iter_count}): {message}{end_color_code}", file=file, flush=True)
 
@@ -73,29 +72,30 @@ def print_poller_log(log_type, iter_count, message, file=sys.stderr):
 class AdaptivePollingState:
     """Manages adaptive polling state for optimized performance"""
     def __init__(self):
-        self.consecutive_empty_queries = 0 
-        self.last_activity_time = time.monotonic() 
-        self.last_height_refresh = 0 
-
-    def record_activity(self, tx_count: int, was_tip_query: bool = True): 
+        self.consecutive_empty_queries = 0 # Tracks empty queries at the tip
+        self.last_activity_time = time.monotonic() # Use monotonic for intervals
+        self.last_height_refresh = 0 # Use monotonic
+        
+    def record_activity(self, tx_count: int, was_tip_query: bool = True): # Added was_tip_query
         """Record transaction activity"""
         if tx_count > 0:
             self.last_activity_time = time.monotonic()
             self.consecutive_empty_queries = 0
-        elif was_tip_query: 
+        elif was_tip_query: # Only increment if it was a tip query that yielded no new tx
             self.consecutive_empty_queries += 1
             
     def is_active_period(self) -> bool:
         """Determine if we're in an active period"""
         time_since_activity = time.monotonic() - self.last_activity_time
+        # Active if activity in last 5 seconds OR if we haven't had too many consecutive empty tip polls
         return (time_since_activity < 5.0) or \
-               (self.consecutive_empty_queries < CONSECUTIVE_EMPTY_QUERIES_FOR_SLOW_POLL // 2)
+               (self.consecutive_empty_queries < CONSECUTIVE_EMPTY_QUERIES_FOR_SLOW_POLL // 2) # Uses the constant
         
     def get_optimal_poll_interval(self) -> float:
         """Get optimal polling interval based on current state"""
         if self.is_active_period():
             return TIP_POLL_INTERVAL_FAST
-        elif self.consecutive_empty_queries >= CONSECUTIVE_EMPTY_QUERIES_FOR_SLOW_POLL: 
+        elif self.consecutive_empty_queries >= CONSECUTIVE_EMPTY_QUERIES_FOR_SLOW_POLL: # Uses the constant
             return TIP_POLL_INTERVAL_SLOW
         else:
             return TIP_POLL_INTERVAL_BASE
@@ -104,10 +104,12 @@ class AdaptivePollingState:
         """Get optimal query range based on activity for tip polling"""
         return TIP_QUERY_RANGE_ACTIVE if self.is_active_period() else TIP_QUERY_RANGE_INACTIVE
             
-    def should_refresh_height(self) -> bool: 
+    def should_refresh_height(self) -> bool: # Removed is_currently_at_tip, logic can infer
         """Determine if height should be refreshed"""
         time_since_refresh = time.monotonic() - self.last_height_refresh
-        if self.consecutive_empty_queries >= GET_HEIGHT_REFRESH_ON_EMPTY_QUERIES: 
+        # Note: The report's logic for GET_HEIGHT_REFRESH_ON_EMPTY_QUERIES was '2'.
+        # The class uses self.consecutive_empty_queries.
+        if self.consecutive_empty_queries >= GET_HEIGHT_REFRESH_ON_EMPTY_QUERIES:
             return True
         refresh_interval = GET_HEIGHT_REFRESH_FAST_INTERVAL if self.is_active_period() else GET_HEIGHT_REFRESH_SLOW_INTERVAL
         return time_since_refresh > refresh_interval
@@ -150,6 +152,7 @@ async def poll_for_monad_transactions():
     while True:
         loop_iteration_count += 1
         try:
+            is_at_tip_for_height_check = current_query_from_block >= server_latest_known_block - BLOCK_CATCH_UP_OFFSET
             if polling_state.should_refresh_height() or current_query_from_block > server_latest_known_block:
                 try:
                     new_height = await hypersync_client.get_height()
@@ -173,8 +176,8 @@ async def poll_for_monad_transactions():
             
             if is_catching_up:
                 query_obj.to_block = min(
-                    current_query_from_block + MAX_CATCH_UP_BATCH_SIZE - 1, 
-                    server_latest_known_block  
+                    current_query_from_block + MAX_CATCH_UP_BATCH_SIZE - 1,
+                    server_latest_known_block 
                 )
                 sleep_after_fetch = BACKLOG_POLL_INTERVAL_SECONDS
             else: # At tip
@@ -184,7 +187,7 @@ async def poll_for_monad_transactions():
 
             if query_obj.to_block is not None and query_obj.from_block > query_obj.to_block:
                 await asyncio.sleep(sleep_after_fetch) 
-                continue
+                continue 
 
             response = await hypersync_client.get(query_obj)
             
@@ -219,12 +222,11 @@ async def poll_for_monad_transactions():
                                 "transaction_index": getattr(tx, 'transaction_index', 0)
                             }
                             try:
-                                # --- USING BLOCKING PUT WITH TIMEOUT ---
-                                await asyncio.wait_for(TRANSACTION_QUEUE.put(tx_event_data), timeout=1.0)
+                                TRANSACTION_QUEUE.put_nowait(tx_event_data)
                                 new_tx_count_this_iteration += 1
-                            except asyncio.TimeoutError: 
+                            except asyncio.QueueFull:
                                 print_poller_log("WARNING", loop_iteration_count, 
-                                               f"Timeout (1s) putting TX {tx_hash[:10]} to Q. Qsize: {TRANSACTION_QUEUE.qsize()}. Poller may be blocked.")
+                                               f"Queue full (size {TRANSACTION_QUEUE.qsize()}), skipping TX {tx_hash[:10]}")
                 
                 polling_state.record_activity(new_tx_count_this_iteration, not is_catching_up)
                 if new_tx_count_this_iteration > 0:
@@ -237,7 +239,7 @@ async def poll_for_monad_transactions():
                     server_latest_known_block = response.archive_height
             elif processed_up_to_block >= query_obj.from_block:
                 current_query_from_block = processed_up_to_block + 1
-            else: 
+            else:
                 current_query_from_block = query_obj.from_block + 1
                 if not is_catching_up and new_tx_count_this_iteration == 0 :
                     sleep_after_fetch = polling_state.get_optimal_poll_interval() 
@@ -255,27 +257,8 @@ async def poll_for_monad_transactions():
             traceback.print_exc(file=sys.stderr)
             await asyncio.sleep(ERROR_RETRY_DELAY_SECONDS)
 
-# --- FastAPI app ---
+# --- FastAPI app, lifespan, SSE generator, routes ---
 app = FastAPI(title="Monad Live Transaction Visualizer - OPTIMIZED")
-
-# --- ADD CORS MIDDLEWARE ---
-origins = [
-    "http://localhost",         # For local testing if frontend is served on a different port
-    "http://localhost:3000",    # Common for local React/Vue dev servers
-    "http://localhost:8000",    # If you serve frontend locally on same port as backend for testing
-    "https://your-vercel-frontend-name.vercel.app",  # REPLACE THIS with your actual Vercel URL
-    # Add any other origins you need to allow
-]
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
-    allow_methods=["*"], # Allows all methods (GET, POST, etc.)
-    allow_headers=["*"], # Allows all headers
-)
-# --- END CORS MIDDLEWARE ---
-
 
 static_dir_path = os.path.join(os.path.dirname(__file__), "static")
 if os.path.isdir(static_dir_path):
@@ -304,7 +287,7 @@ async def lifespan(app_instance: FastAPI):
         try:
             fetched_height = await hypersync_client.get_height()
             if fetched_height is not None:
-                temp_initial_height = max(0, fetched_height - INITIAL_CATCH_UP_OFFSET) 
+                temp_initial_height = max(0, fetched_height - BLOCK_CATCH_UP_OFFSET) # Use correct constant
                 print_general_info("STARTUP", f"Current chain height fetched: {fetched_height}")
             else:
                 print_general_yellow("STARTUP: Could not fetch initial height from Hypersync.")
@@ -379,11 +362,11 @@ async def transaction_stream(request: Request):
 
 @app.get("/", response_class=FileResponse)
 async def read_index():
-    html_file_name = "index.html" 
+    html_file_name = "index.html" # Your specified HTML filename
     html_file_path = os.path.join(os.path.dirname(__file__), "static", html_file_name)
 
     if not os.path.exists(html_file_path):
-        html_file_name_fallback = "index_optimized.html"
+        html_file_name_fallback = "index_optimized.html" 
         html_file_path_fallback = os.path.join(os.path.dirname(__file__), "static", html_file_name_fallback)
         if not os.path.exists(html_file_path_fallback):
             return HTMLResponse(content=f"<html><body><h1>Error 404: {html_file_name} or {html_file_name_fallback} not found.</h1></body></html>", status_code=404)

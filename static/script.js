@@ -372,7 +372,7 @@ function init() {
     console.log('High-performance WebGL particle system ready.');
 }
 
-const eventSource = new EventSource('/transaction-stream');
+const eventSource = new EventSource('https://monad-visualizer-optimized-uv8q.onrender.com');
 
 eventSource.onopen = function() {
     console.log(`JS: SSE Stream connected. Listening for '${SSE_BATCH_EVENT_NAME}' events...`);

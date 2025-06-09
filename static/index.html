@@ -3,25 +3,22 @@
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Monad Live Transaction Visualizer (WebGL)</title>
-        <!-- Corrected path: relative to the 'static' folder which is now the root -->
-        <link rel="stylesheet" href="style.css"> 
+        <title>Monad Live Block Visualizer</title>
+        <link rel="stylesheet" href="/static/style.css"> 
     </head>
     <body>
         <video autoplay loop muted playsinline id="background-video">
-            <!-- Corrected path: relative to the 'static' folder -->
-            <source src="Generate_a_seamless_202505231121.mp4" type="video/mp4">
+            <source src="/static/Generate_a_seamless_202505231121.mp4" type="video/mp4">
             Your browser does not support the video tag.
         </video>
 
         <div id="tps-counter">TPS: 0.0</div>
-        <div id="performance-counter">Stars: 0 | FPS: 0</div> 
+        <div id="performance-counter">Stars: 0 | FPS: 0</div>
         
         <div id="star-canvas-container">
             <canvas id="starCanvas"></canvas>
         </div>
 
-        <!-- Corrected path: relative to the 'static' folder -->
-        <script src="script.js"></script> 
+        <script src="/static/script.js"></script> 
     </body>
 </html>

@@ -26,7 +26,7 @@ PRE_FETCH_BLOCK_COUNT = 100
 ERROR_RETRY_DELAY_SECONDS = 5
 INITIAL_BOOTSTRAP_BLOCK_COUNT = 50
 
-# --- Queues and Caches for DUAL STREAMING ---
+# --- Queues, Caches, and Events for DUAL STREAMING ---
 # 1. For the main "blinks" visualizer (block summaries)
 BLOCK_SUMMARY_QUEUE = asyncio.Queue(maxsize=5000)
 # 2. NEW: A rolling cache for the last N transaction details
@@ -34,12 +34,9 @@ LATEST_TRANSACTIONS_CACHE = deque(maxlen=15) # Keep the latest 15 transactions
 # 3. NEW: An event to signal when the latest transactions cache has been updated
 LATEST_TX_UPDATE_EVENT = asyncio.Event()
 
-
-# --- SSE Configuration ---
-# For main visualizer
+# SSE Configuration
 SSE_EVENT_NAME_BLOCKS = "new_block_summary"
-# NEW: For the transaction feed UI element
-SSE_EVENT_NAME_TXS = "latest_transactions"
+SSE_EVENT_NAME_TXS = "latest_transactions" # NEW: Event name for the transaction feed
 SSE_KEEP_ALIVE_TIMEOUT = 20.0
 
 hypersync_client: hypersync.HypersyncClient | None = None
@@ -98,15 +95,13 @@ async def poll_for_new_blocks():
 
             # --- MODIFIED: Process full transaction data ---
             tx_counts = defaultdict(int)
-            
-            # This list will hold the detailed transactions from this fetch
             newly_fetched_txs = []
 
             if response.data.transactions:
-                for tx in response.data.transactions:
+                # Iterate backwards to process newest transactions first for the cache
+                for tx in reversed(response.data.transactions):
                     if tx.block_number is not None:
                         tx_counts[tx.block_number] += 1
-                        # Create the detailed object for our new cache
                         newly_fetched_txs.append({
                             "hash": getattr(tx, 'hash', 'N/A'),
                             "from": getattr(tx, 'from_', 'N/A'),
@@ -114,14 +109,13 @@ async def poll_for_new_blocks():
                             "value": getattr(tx, 'value', '0')
                         })
             
-            # --- NEW: Update the rolling cache with the latest transactions ---
+            # --- NEW: Update the rolling cache and signal the event ---
             if newly_fetched_txs:
                 # The deque will automatically keep only the last N items
-                LATEST_TRANSACTIONS_CACHE.extend(newly_fetched_txs)
+                LATEST_TRANSACTIONS_CACHE.extendleft(newly_fetched_txs) # Use extendleft to add newest items to the front
                 # Signal to the new SSE endpoint that there's new data
                 LATEST_TX_UPDATE_EVENT.set()
                 LATEST_TX_UPDATE_EVENT.clear()
-
 
             # --- This part for the main visualizer remains the same ---
             sorted_blocks = sorted(response.data.blocks, key=lambda b: b.number or -1)
@@ -198,7 +192,6 @@ async def sse_latest_tx_generator(request: Request):
             print_general_red(f"SSE (Latest TX) ERROR: {type(e).__name__}: {e}")
             await asyncio.sleep(1)
 
-
 # --- FastAPI App Setup ---
 app = FastAPI(title="Monad Live Block Visualizer Backend")
 origins = ["*"] 
@@ -251,4 +244,3 @@ if __name__ == "__main__":
     module_name = os.path.splitext(os.path.basename(__file__))[0]
     print_general_info("SYSTEM", f"Will run Uvicorn on http://127.0.0.1:{port} for {module_name}:app")
     uvicorn.run(f"{module_name}:app", host="0.0.0.0", port=port, reload=True)
-

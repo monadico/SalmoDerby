@@ -61,9 +61,74 @@ canvas#starCanvas {
     display: block; 
     width: 100%;
     height: 100%;
-    cursor: default; /* Clicks are disabled in this version */
+    cursor: default;
 }
 
 canvas {
     touch-action: none;
 }
+
+/* --- Live Transaction Feed Styles --- */
+#transaction-feed-container {
+    position: fixed;
+    bottom: 20px;
+    left: 20px;
+    width: 450px;
+    height: 250px;
+    background-color: rgba(0, 20, 0, 0.75);
+    border: 1px solid #0f0;
+    border-radius: 8px;
+    color: #0f0;
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 0.8em;
+    z-index: 30;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    box-shadow: 0 0 15px rgba(0, 255, 0, 0.2);
+}
+
+.feed-header {
+    padding: 8px;
+    background-color: rgba(0, 50, 0, 0.9);
+    text-align: center;
+    font-weight: bold;
+    text-shadow: 0 0 5px #0f0;
+    border-bottom: 1px solid #0f0;
+}
+
+#transaction-list {
+    list-style-type: none;
+    padding: 0;
+    margin: 0;
+    overflow-y: auto;
+    flex-grow: 1;
+}
+
+/* UPDATED/NEW Styles for Clickable Links */
+#transaction-list li {
+    padding: 0; 
+    border-bottom: 1px solid #030;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis; 
+}
+
+#transaction-list li a {
+    display: block;
+    padding: 6px 8px;
+    text-decoration: none;
+    color: inherit;
+    transition: background-color 0.2s ease-in-out;
+}
+
+#transaction-list li a:hover {
+    background-color: rgba(0, 255, 0, 0.15);
+    cursor: pointer;
+}
+
+/* Color coding for different parts of the transaction */
+#transaction-list .tx-hash { color: #0f0; }
+#transaction-list .tx-from { color: #0ff; }
+#transaction-list .tx-to { color: #ff0; }
+#transaction-list .tx-value { color: #fff; font-weight: bold; }

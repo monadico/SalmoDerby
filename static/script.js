@@ -45,6 +45,12 @@ const PARTICLE_BASE_SIZE = 1.0;
 const DRIFT_SPEED_SCALE = 0.0005; 
 const SSE_EVENT_NAME_BLOCKS = "new_block_summary";
 const SSE_EVENT_NAME_TXS = "latest_transactions";
+const MONAD_EXPLORER_URL = "https://testnet.monadexplorer.com/tx/";
+
+// --- IMPORTANT: Set this to your deployed Render backend URL ---
+const BACKEND_URL = "https://monad-visualizer-optimized.onrender.com";
+// For local testing, you would use:
+// const BACKEND_URL = ""; // An empty string makes the URL relative, e.g., /transaction-stream
 
 // --- Shaders ---
 const vertexShaderSource = `
@@ -70,7 +76,6 @@ void main() {
     v_color = a_color;
     v_glowIntensity = sizeMultiplier;
 }`;
-
 const fragmentShaderSource = `
 precision mediump float;
 varying float v_alpha_final; varying vec3 v_color; varying float v_glowIntensity;
@@ -89,89 +94,40 @@ void main() {
 class ParticleSystem {
     constructor(maxParticles) { this.maxParticles = maxParticles; this.activeParticleCount = 0; this.nextAvailableIndex = 0; this.positions = new Float32Array(maxParticles * 2); this.velocities = new Float32Array(maxParticles * 2); this.sizes = new Float32Array(maxParticles); this.baseAlphas = new Float32Array(maxParticles); this.ages = new Float32Array(maxParticles); this.birthTimes = new Float32Array(maxParticles); this.colors = new Float32Array(maxParticles * 3); this.activeFlags = new Uint8Array(maxParticles); this.setupBuffers(); }
     setupBuffers() { this.positionBuffer = gl.createBuffer(); this.sizeBuffer = gl.createBuffer(); this.alphaBuffer = gl.createBuffer(); this.ageBuffer = gl.createBuffer(); this.colorBuffer = gl.createBuffer(); }
-    
     addParticle() {
         let index = this.nextAvailableIndex;
         if (!this.activeFlags[index]) { this.activeParticleCount = Math.min(this.activeParticleCount + 1, this.maxParticles); }
-        
-        const canvasCssWidth = canvas.clientWidth;
-        const canvasCssHeight = canvas.clientHeight;
-        let spawnX, spawnY;
-
-        let attempts = 0;
-        const maxAttempts = 50;
-
-        while (attempts < maxAttempts) {
-            const candidateX = Math.random() * canvasCssWidth;
-            const candidateY = Math.random() * canvasCssHeight;
+        const canvasCssWidth = canvas.clientWidth; const canvasCssHeight = canvas.clientHeight;
+        let spawnX, spawnY; let attempts = 0;
+        while (attempts < 50) {
+            const candidateX = Math.random() * canvasCssWidth; const candidateY = Math.random() * canvasCssHeight;
             const normPoint = { x: candidateX / canvasCssWidth, y: candidateY / canvasCssHeight };
-            if (isPointInPolygon(normPoint, spawnZone)) {
-                spawnX = candidateX;
-                spawnY = candidateY;
-                break;
-            }
+            if (isPointInPolygon(normPoint, spawnZone)) { spawnX = candidateX; spawnY = candidateY; break; }
             attempts++;
         }
         if (spawnX === undefined) { return; }
-
         this.activeFlags[index] = 1; this.nextAvailableIndex = (index + 1) % this.maxParticles;
         const currentTime = performance.now();
         this.positions[index * 2] = spawnX; this.positions[index * 2 + 1] = spawnY;
         this.velocities[index * 2] = (Math.random() - 0.5) * DRIFT_SPEED_SCALE * canvasCssWidth;
         this.velocities[index * 2 + 1] = (Math.random() - 0.5) * DRIFT_SPEED_SCALE * canvasCssHeight * 0.5;
-        this.sizes[index] = PARTICLE_BASE_SIZE * (0.8 + Math.random() * 0.4);
-        this.baseAlphas[index] = 1.0; this.ages[index] = 0; this.birthTimes[index] = currentTime;
+        this.sizes[index] = PARTICLE_BASE_SIZE * (0.8 + Math.random() * 0.4); this.baseAlphas[index] = 1.0;
+        this.ages[index] = 0; this.birthTimes[index] = currentTime;
         this.colors[index * 3] = 0.8 + Math.random() * 0.2; this.colors[index * 3 + 1] = 0.8 + Math.random() * 0.2; this.colors[index * 3 + 2] = 0.9 + Math.random() * 0.1;
     }
-
     update(currentTime) { let currentActive = 0; for (let i = 0; i < this.maxParticles; i++) { if (!this.activeFlags[i]) continue; const age = currentTime - this.birthTimes[i]; if (age > PARTICLE_LIFESPAN_MS) { this.activeFlags[i] = 0; this.activeParticleCount--; continue; } this.ages[i] = age; const dtSeconds = 16.67 / 1000; this.positions[i * 2] += this.velocities[i * 2] * dtSeconds; this.positions[i * 2 + 1] += this.velocities[i * 2 + 1] * dtSeconds; if (this.positions[i * 2] < 0 || this.positions[i * 2] > canvas.clientWidth || this.positions[i * 2 + 1] < 0 || this.positions[i * 2 + 1] > canvas.clientHeight) { this.activeFlags[i] = 0; this.activeParticleCount--; } currentActive++; } return currentActive; }
-    
-    render() {
-        if (!gl || !program || this.activeParticleCount === 0) return;
-        const activePositionsData = new Float32Array(this.activeParticleCount * 2); const activeSizesData = new Float32Array(this.activeParticleCount); const activeBaseAlphasData = new Float32Array(this.activeParticleCount); const activeAgesData = new Float32Array(this.activeParticleCount); const activeColorsData = new Float32Array(this.activeParticleCount * 3);
-        let bufferWriteIdx = 0;
-        for (let i = 0; i < this.maxParticles; i++) {
-            if (this.activeFlags[i]) {
-                activePositionsData[bufferWriteIdx * 2] = this.positions[i * 2]; activePositionsData[bufferWriteIdx * 2 + 1] = this.positions[i * 2 + 1];
-                activeSizesData[bufferWriteIdx] = this.sizes[i]; activeBaseAlphasData[bufferWriteIdx] = this.baseAlphas[i];
-                activeAgesData[bufferWriteIdx] = this.ages[i]; activeColorsData[bufferWriteIdx * 3] = this.colors[i * 3];
-                activeColorsData[bufferWriteIdx * 3 + 1] = this.colors[i * 3 + 1]; activeColorsData[bufferWriteIdx * 3 + 2] = this.colors[i * 3 + 2];
-                bufferWriteIdx++;
-            }
-        }
-        const particlePosLocation = gl.getAttribLocation(program, 'a_particlePos'); const sizeLocation = gl.getAttribLocation(program, 'a_size'); const alphaLocation = gl.getAttribLocation(program, 'a_alpha'); const ageLocation = gl.getAttribLocation(program, 'a_age'); const colorLocation = gl.getAttribLocation(program, 'a_color');
-        
-        gl.bindBuffer(gl.ARRAY_BUFFER, this.positionBuffer); gl.bufferData(gl.ARRAY_BUFFER, activePositionsData, gl.DYNAMIC_DRAW);
-        gl.enableVertexAttribArray(particlePosLocation); gl.vertexAttribPointer(particlePosLocation, 2, gl.FLOAT, false, 0, 0);
-        gl.bindBuffer(gl.ARRAY_BUFFER, this.sizeBuffer); gl.bufferData(gl.ARRAY_BUFFER, activeSizesData, gl.DYNAMIC_DRAW);
-        gl.enableVertexAttribArray(sizeLocation); gl.vertexAttribPointer(sizeLocation, 1, gl.FLOAT, false, 0, 0);
-        gl.bindBuffer(gl.ARRAY_BUFFER, this.alphaBuffer); gl.bufferData(gl.ARRAY_BUFFER, activeBaseAlphasData, gl.DYNAMIC_DRAW);
-        gl.enableVertexAttribArray(alphaLocation); gl.vertexAttribPointer(alphaLocation, 1, gl.FLOAT, false, 0, 0);
-        gl.bindBuffer(gl.ARRAY_BUFFER, this.ageBuffer); gl.bufferData(gl.ARRAY_BUFFER, activeAgesData, gl.DYNAMIC_DRAW);
-        gl.enableVertexAttribArray(ageLocation); gl.vertexAttribPointer(ageLocation, 1, gl.FLOAT, false, 0, 0);
-        gl.bindBuffer(gl.ARRAY_BUFFER, this.colorBuffer); gl.bufferData(gl.ARRAY_BUFFER, activeColorsData, gl.DYNAMIC_DRAW);
-        gl.enableVertexAttribArray(colorLocation); gl.vertexAttribPointer(colorLocation, 3, gl.FLOAT, false, 0, 0);
-        gl.drawArrays(gl.POINTS, 0, this.activeParticleCount);
-    }
+    render() { if (!gl || !program || this.activeParticleCount === 0) return; const activePositionsData = new Float32Array(this.activeParticleCount * 2); const activeSizesData = new Float32Array(this.activeParticleCount); const activeBaseAlphasData = new Float32Array(this.activeParticleCount); const activeAgesData = new Float32Array(this.activeParticleCount); const activeColorsData = new Float32Array(this.activeParticleCount * 3); let bufferWriteIdx = 0; for (let i = 0; i < this.maxParticles; i++) { if (this.activeFlags[i]) { activePositionsData[bufferWriteIdx * 2] = this.positions[i * 2]; activePositionsData[bufferWriteIdx * 2 + 1] = this.positions[i * 2 + 1]; activeSizesData[bufferWriteIdx] = this.sizes[i]; activeBaseAlphasData[bufferWriteIdx] = this.baseAlphas[i]; activeAgesData[bufferWriteIdx] = this.ages[i]; activeColorsData[bufferWriteIdx * 3] = this.colors[i * 3]; activeColorsData[bufferWriteIdx * 3 + 1] = this.colors[i * 3 + 1]; activeColorsData[bufferWriteIdx * 3 + 2] = this.colors[i * 3 + 2]; bufferWriteIdx++; } } const particlePosLocation = gl.getAttribLocation(program, 'a_particlePos'); const sizeLocation = gl.getAttribLocation(program, 'a_size'); const alphaLocation = gl.getAttribLocation(program, 'a_alpha'); const ageLocation = gl.getAttribLocation(program, 'a_age'); const colorLocation = gl.getAttribLocation(program, 'a_color'); gl.bindBuffer(gl.ARRAY_BUFFER, this.positionBuffer); gl.bufferData(gl.ARRAY_BUFFER, activePositionsData, gl.DYNAMIC_DRAW); gl.enableVertexAttribArray(particlePosLocation); gl.vertexAttribPointer(particlePosLocation, 2, gl.FLOAT, false, 0, 0); gl.bindBuffer(gl.ARRAY_BUFFER, this.sizeBuffer); gl.bufferData(gl.ARRAY_BUFFER, activeSizesData, gl.DYNAMIC_DRAW); gl.enableVertexAttribArray(sizeLocation); gl.vertexAttribPointer(sizeLocation, 1, gl.FLOAT, false, 0, 0); gl.bindBuffer(gl.ARRAY_BUFFER, this.alphaBuffer); gl.bufferData(gl.ARRAY_BUFFER, activeBaseAlphasData, gl.DYNAMIC_DRAW); gl.enableVertexAttribArray(alphaLocation); gl.vertexAttribPointer(alphaLocation, 1, gl.FLOAT, false, 0, 0); gl.bindBuffer(gl.ARRAY_BUFFER, this.ageBuffer); gl.bufferData(gl.ARRAY_BUFFER, activeAgesData, gl.DYNAMIC_DRAW); gl.enableVertexAttribArray(ageLocation); gl.vertexAttribPointer(ageLocation, 1, gl.FLOAT, false, 0, 0); gl.bindBuffer(gl.ARRAY_BUFFER, this.colorBuffer); gl.bufferData(gl.ARRAY_BUFFER, activeColorsData, gl.DYNAMIC_DRAW); gl.enableVertexAttribArray(colorLocation); gl.vertexAttribPointer(colorLocation, 3, gl.FLOAT, false, 0, 0); gl.drawArrays(gl.POINTS, 0, this.activeParticleCount); }
 }
 
-// --- WebGL & App Initialization ---
+// --- WebGL & App Initialization & Helper Functions ---
 function createShader(glContext, type, source) { const shader = glContext.createShader(type); glContext.shaderSource(shader, source); glContext.compileShader(shader); if (!glContext.getShaderParameter(shader, glContext.COMPILE_STATUS)) { console.error(`Shader compilation error:`, glContext.getShaderInfoLog(shader)); glContext.deleteShader(shader); return null; } return shader; }
 function createProgram(glContext, vertexShader, fragmentShader) { const prog = glContext.createProgram(); glContext.attachShader(prog, vertexShader); glContext.attachShader(prog, fragmentShader); glContext.linkProgram(prog); if (!glContext.getProgramParameter(prog, glContext.LINK_STATUS)) { console.error('Program linking error:', glContext.getProgramInfoLog(prog)); return null; } return prog; }
 function initWebGL() { gl = canvas.getContext('webgl', { antialias: true }); if (!gl) { console.error('WebGL not supported!'); return false; } const vertexShader = createShader(gl, gl.VERTEX_SHADER, vertexShaderSource); const fragmentShader = createShader(gl, gl.FRAGMENT_SHADER, fragmentShaderSource); if (!vertexShader || !fragmentShader) return false; program = createProgram(gl, vertexShader, fragmentShader); if (!program) return false; gl.useProgram(program); gl.enable(gl.BLEND); gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA); particleSystem = new ParticleSystem(MAX_PARTICLES); return true; }
-function resizeCanvasAndWebGLContext() {
-    const displayWidth  = canvas.clientWidth;
-    const displayHeight = canvas.clientHeight;
-    if (canvas.width  !== displayWidth || canvas.height !== displayHeight) {
-        canvas.width  = displayWidth;
-        canvas.height = displayHeight;
-        if (gl) { gl.viewport(0, 0, canvas.width, canvas.height); }
-        if (program) { const resolutionLocation = gl.getUniformLocation(program, 'u_resolution'); gl.uniform2f(resolutionLocation, canvas.width, canvas.height); }
-    }
-}
-function renderLoop(currentTimeMs) { animationId = requestAnimationFrame(renderLoop); if (!gl || !particleSystem || !program) return; resizeCanvasAndWebGLContext(); frameCount++; const nowMs = performance.now(); if (nowMs - lastFPSTime >= 1000) { currentFPS = frameCount; lastFPSTime = nowMs; frameCount = 0; } gl.clearColor(0.0, 0.0, 0.0, 0.0); gl.clear(gl.COLOR_BUFFER_BIT); const activeParticles = particleSystem.update(nowMs); if (performanceDisplay) { performanceDisplay.textContent = `Stars: ${activeParticles} | FPS: ${currentFPS}`; } particleSystem.render(); }
+function resizeCanvasAndWebGLContext() { const displayWidth  = canvas.clientWidth; const displayHeight = canvas.clientHeight; if (canvas.width  !== displayWidth || canvas.height !== displayHeight) { canvas.width  = displayWidth; canvas.height = displayHeight; if (gl) { gl.viewport(0, 0, canvas.width, canvas.height); } if (program) { const resolutionLocation = gl.getUniformLocation(program, 'u_resolution'); gl.uniform2f(resolutionLocation, canvas.width, canvas.height); } } }
+function renderLoop() { animationId = requestAnimationFrame(renderLoop); if (!gl || !particleSystem || !program) return; resizeCanvasAndWebGLContext(); frameCount++; const nowMs = performance.now(); if (nowMs - lastFPSTime >= 1000) { currentFPS = frameCount; lastFPSTime = nowMs; frameCount = 0; } gl.clearColor(0.0, 0.0, 0.0, 0.0); gl.clear(gl.COLOR_BUFFER_BIT); const activeParticles = particleSystem.update(nowMs); if (performanceDisplay) { performanceDisplay.textContent = `Stars: ${activeParticles} | FPS: ${currentFPS}`; } particleSystem.render(); }
 function updateTPSDisplay() { const now = Date.now(); while (transactionTimestamps.length > 0 && transactionTimestamps[0] < now - (tpsWindowSeconds * 1000)) { transactionTimestamps.shift(); } const tps = (transactionTimestamps.length / tpsWindowSeconds).toFixed(1); if (tpsDisplay) { tpsDisplay.textContent = `TPS: ${tps}`; } }
 
+// --- Main Application Initialization ---
 function init() {
     if (!initWebGL()) { const starContainer = document.getElementById('star-canvas-container'); if(starContainer) starContainer.innerHTML = "<p style='color:red; text-align:center;'>WebGL not supported or failed to initialize.</p>"; return; }
     console.log("WebGL particle system initialized.");
@@ -183,10 +139,44 @@ function init() {
     console.log("High-performance WebGL particle system ready.");
 }
 
+// --- NEW: Function to update the transaction feed UI ---
+function updateTransactionFeed(transactions) {
+    if (!txList) return;
+    const fragment = document.createDocumentFragment();
+
+    transactions.forEach(tx => {
+        const listItem = document.createElement('li');
+        const explorerUrl = `${MONAD_EXPLORER_URL}${tx.hash}`;
+        
+        // Format MON value from Wei (10^18)
+        const valueInWei = BigInt(tx.value || '0');
+        const valueInMon = (Number(valueInWei * 10000n / 10n**18n) / 10000).toFixed(4);
+
+        const fromAddr = tx.from || 'N/A';
+        const toAddr = tx.to || 'N/A';
+
+        listItem.innerHTML = `
+            <a href="${explorerUrl}" target="_blank" rel="noopener noreferrer">
+                <span class="tx-hash" title="${tx.hash}">Hash: ${tx.hash.substring(0, 10)}...</span>
+                <span class="tx-value">${valueInMon} MON</span>
+                <br>
+                <span class="tx-from" title="${fromAddr}">From: ${fromAddr.substring(0, 12)}...</span>
+                &rarr;
+                <span class="tx-to" title="${toAddr}">To: ${toAddr.substring(0, 12)}...</span>
+            </a>`;
+        fragment.appendChild(listItem);
+    });
+    
+    // Replace the entire content with the new list to ensure it's always up-to-date
+    txList.innerHTML = '';
+    txList.appendChild(fragment);
+}
+
+
 // --- SSE Connections ---
-// Connect to the main visualizer's stream
-const blockSummaryEventSource = new EventSource('/transaction-stream');
-blockSummaryEventSource.onopen = function() { console.log("JS: Block Summary SSE Stream connected. Listening for 'new_block_summary' events..."); };
+// Connect to the main visualizer's stream for the star bursts
+const blockSummaryEventSource = new EventSource(`${BACKEND_URL}/transaction-stream`);
+blockSummaryEventSource.onopen = function() { console.log("JS: Block Summary SSE Stream connected."); };
 blockSummaryEventSource.addEventListener(SSE_EVENT_NAME_BLOCKS, function(event) {
     try {
         const blockSummaryBatch = JSON.parse(event.data); 
@@ -198,35 +188,24 @@ blockSummaryEventSource.addEventListener(SSE_EVENT_NAME_BLOCKS, function(event) 
                 }
             }
         }
-    } catch (e) { console.error("JS ERROR: Failed to parse or process block summary data:", e, "Data was:", event.data); }
+    } catch (e) { console.error("JS ERROR: Failed to parse block summary data:", e, "Data:", event.data); }
 });
 blockSummaryEventSource.onerror = function(err) { console.error("JS: Block Summary EventSource failed:", err); };
 
-// Connect to the new transaction feed stream
-const txFeedEventSource = new EventSource('/latest-tx-feed');
-txFeedEventSource.onopen = function() { console.log("JS: Transaction Feed SSE Stream connected. Listening for 'latest_transactions' events..."); };
+// Connect to the new transaction feed stream for the UI list
+const txFeedEventSource = new EventSource(`${BACKEND_URL}/latest-tx-feed`);
+txFeedEventSource.onopen = function() { console.log("JS: Transaction Feed SSE Stream connected."); };
 txFeedEventSource.addEventListener(SSE_EVENT_NAME_TXS, function(event) {
-    if (!txList) return;
     try {
-        const transactions = JSON.parse(event.data); 
-        const fragment = document.createDocumentFragment();
-        transactions.forEach(tx => {
-            const listItem = document.createElement('li');
-            const explorerUrl = `https://testnet.monadexplorer.com/tx/${tx.hash}`;
-            const valueInWei = BigInt(tx.value || '0'); 
-            const valueInMon = (Number(valueInWei) / 1e18).toFixed(4);
-            const from_addr = tx.from || 'N/A'; 
-            const to_addr = tx.to || 'N/A';
-            listItem.innerHTML = `<a href="${explorerUrl}" target="_blank" rel="noopener noreferrer"><span class="tx-hash" title="${tx.hash}">Hash: ${tx.hash.substring(0, 12)}...</span><br><span class="tx-from" title="${from_addr}">From: ${from_addr.substring(0, 14)}...</span> &rarr; <span class="tx-to" title="${to_addr}">To: ${to_addr.substring(0, 14)}...</span><span class="tx-value">${valueInMon} MON</span></a>`;
-            fragment.appendChild(listItem);
-        });
-        txList.innerHTML = ''; 
-        txList.appendChild(fragment);
+        const transactions = JSON.parse(event.data);
+        if (Array.isArray(transactions)) {
+            updateTransactionFeed(transactions);
+        }
     } catch (e) { console.error("JS ERROR: Failed to parse transaction feed data:", e, "Data:", event.data); }
 });
 txFeedEventSource.onerror = function(err) { console.error("JS: Transaction Feed EventSource failed:", err); };
 
-// --- Cleanup and Initialization Listeners ---
+// --- App Initialization and Cleanup ---
 document.addEventListener('DOMContentLoaded', init);
 window.addEventListener('beforeunload', function() {
     if (animationId) { cancelAnimationFrame(animationId); }

@@ -12,7 +12,7 @@ from hypersync import TransactionField, BlockField, TransactionSelection, Client
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
-# Removed FileResponse and StaticFiles as they are no longer needed
+# Removed FileResponse and StaticFiles as this is a pure API backend
 import uvicorn
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -44,11 +44,8 @@ def print_general_red(msg, file=sys.stderr): print(f"\033[91mERROR: {msg}\033[0m
 def print_general_yellow(msg, file=sys.stderr): print(f"\033[93mWARNING: {msg}\033[0m", file=file, flush=True)
 def print_general_info(msg_prefix, message, file=sys.stderr): print(f"{msg_prefix.upper()} INFO: {message}", file=file, flush=True)
 
+# --- Poller and SSE Generators (No Changes Needed) ---
 async def poll_for_new_blocks():
-    """
-    Background task that fetches new blocks, creates summaries for the main visualizer,
-    AND populates a cache with the latest detailed transactions for the new UI element.
-    """
     if not hypersync_client:
         print_general_red("POLLER: Client not initialized.")
         return
@@ -80,7 +77,6 @@ async def poll_for_new_blocks():
             query_obj.from_block = current_block
             query_obj.to_block = min(current_block + PRE_FETCH_BLOCK_COUNT, new_latest_tip + 1)
             
-            # print_general_info("POLLER", f"Woke up. Fetching blocks from {query_obj.from_block} to {query_obj.to_block - 1}...")
             response = await hypersync_client.get(query_obj)
             
             if not response or not response.data:
@@ -118,8 +114,6 @@ async def poll_for_new_blocks():
                     }
                     await BLOCK_SUMMARY_QUEUE.put(block_summary)
                 
-                print_general_info("POLLER", f"Queued summaries for {len(sorted_blocks)} new blocks. Qsize: {BLOCK_SUMMARY_QUEUE.qsize()}")
-            
             current_block = (response.next_block if response.next_block and response.next_block > current_block 
                              else (sorted_blocks[-1].number + 1 if sorted_blocks else current_block + 1))
 
@@ -132,9 +126,6 @@ async def poll_for_new_blocks():
             await asyncio.sleep(ERROR_RETRY_DELAY_SECONDS)
 
 async def sse_drip_feed_generator(request: Request):
-    """
-    (UNCHANGED) Streams block summaries for the main visualizer, paced by timestamps.
-    """
     last_sent_timestamp = None
     while True:
         if await request.is_disconnected(): break
@@ -157,9 +148,6 @@ async def sse_drip_feed_generator(request: Request):
         except Exception as e: print_general_red(f"SSE (Blocks) ERROR: {type(e).__name__}: {e}"); await asyncio.sleep(1)
 
 async def sse_latest_tx_generator(request: Request):
-    """
-    Streams the full list of latest transactions whenever the cache is updated.
-    """
     while True:
         if await request.is_disconnected(): break
         try:
@@ -167,8 +155,6 @@ async def sse_latest_tx_generator(request: Request):
             latest_txs = list(LATEST_TRANSACTIONS_CACHE)
             sse_event = f"event: {SSE_EVENT_NAME_TXS}\ndata: {json.dumps(latest_txs)}\n\n"
             yield sse_event
-        except asyncio.TimeoutError:
-            yield ": keep-alive\n\n"
         except asyncio.CancelledError:
             break
         except Exception as e:
@@ -178,17 +164,22 @@ async def sse_latest_tx_generator(request: Request):
 # --- FastAPI App Setup ---
 app = FastAPI(title="Monad Transaction Data API")
 
-# --- CORS MIDDLEWARE IS CRITICAL FOR DEPLOYMENT ---
+# --- CORRECTED CORS MIDDLEWARE FOR PRODUCTION ---
 origins = [
-    "https://monad-visualizer-optimized-onet.vercel.app", # Your production frontend URL
-    "http://localhost:3000", # For local development if needed
-]
-app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+    "https://monadview.vercel.app", # Your production frontend URL
+    # Add any other frontend URLs you might have (e.g., preview deployments)
+    # "https://your-preview-deployment.vercel.app", 
+] 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-# --- REMOVED STATIC FILE SERVING ---
-# app.mount("/static", ...) is no longer here
+# Static file serving is removed as this is a pure API backend
 
-# --- Lifespan manager (remains the same) ---
 @asynccontextmanager
 async def lifespan(app_instance: FastAPI):
     print_general_info("SYSTEM", "FastAPI application starting up...")
@@ -205,8 +196,10 @@ async def lifespan(app_instance: FastAPI):
         print_general_info("STARTUP", "Monad block poller task started.")
     except Exception as e:
         print_general_red(f"STARTUP: Failed to initialize client or start poller: {e}"); yield
+    
     yield 
-    if hasattr(app_instance.state, 'poller_task'):
+    
+    if hasattr(app_instance.state, 'poller_task') and app_instance.state.poller_task:
         app_instance.state.poller_task.cancel()
         try: await app_instance.state.poller_task
         except asyncio.CancelledError: print_general_info("SHUTDOWN", "Poller task successfully cancelled.")
@@ -219,15 +212,15 @@ app.router.lifespan_context = lifespan
 async def read_root():
     return {"message": "Monad Visualizer Backend is running."}
 
-@app.get("/transaction-stream") # For the main "blinks" visualizer
+@app.get("/transaction-stream")
 async def transaction_stream(request: Request):
     return StreamingResponse(sse_drip_feed_generator(request), media_type="text/event-stream")
 
-@app.get("/latest-tx-feed") # For the new transaction feed UI
+@app.get("/latest-tx-feed")
 async def latest_tx_feed(request: Request):
     return StreamingResponse(sse_latest_tx_generator(request), media_type="text/event-stream")
 
-# --- Uvicorn runner (remains the same) ---
+# --- Uvicorn runner (for local testing only) ---
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     module_name = os.path.splitext(os.path.basename(__file__))[0]

@@ -11,8 +11,8 @@ import hypersync
 from hypersync import TransactionField, BlockField, TransactionSelection, ClientConfig, Query, FieldSelection
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import HTMLResponse, StreamingResponse
+# Removed FileResponse and StaticFiles as they are no longer needed
 import uvicorn
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -25,8 +25,7 @@ PRE_FETCH_INTERVAL_SECONDS = 5.0
 PRE_FETCH_BLOCK_COUNT = 100
 ERROR_RETRY_DELAY_SECONDS = 5
 INITIAL_BOOTSTRAP_BLOCK_COUNT = 50
-# --- ADDED MISSING CONSTANT ---
-CATCH_UP_BATCH_SIZE = 100 # How many blocks to fetch in one 'get' call when catching up
+CATCH_UP_BATCH_SIZE = 100
 
 # --- Queues, Caches, and Events for DUAL STREAMING ---
 BLOCK_SUMMARY_QUEUE = asyncio.Queue(maxsize=5000)
@@ -134,7 +133,7 @@ async def poll_for_new_blocks():
 
 async def sse_drip_feed_generator(request: Request):
     """
-    Streams block summaries for the main visualizer, paced by timestamps.
+    (UNCHANGED) Streams block summaries for the main visualizer, paced by timestamps.
     """
     last_sent_timestamp = None
     while True:
@@ -177,11 +176,19 @@ async def sse_latest_tx_generator(request: Request):
             await asyncio.sleep(1)
 
 # --- FastAPI App Setup ---
-app = FastAPI(title="Monad Live Block Visualizer Backend")
-origins = ["*"] 
-app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
-app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static")), name="static")
+app = FastAPI(title="Monad Transaction Data API")
 
+# --- CORS MIDDLEWARE IS CRITICAL FOR DEPLOYMENT ---
+origins = [
+    "https://monad-visualizer-optimized-onet.vercel.app", # Your production frontend URL
+    "http://localhost:3000", # For local development if needed
+]
+app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+
+# --- REMOVED STATIC FILE SERVING ---
+# app.mount("/static", ...) is no longer here
+
+# --- Lifespan manager (remains the same) ---
 @asynccontextmanager
 async def lifespan(app_instance: FastAPI):
     print_general_info("SYSTEM", "FastAPI application starting up...")
@@ -198,10 +205,8 @@ async def lifespan(app_instance: FastAPI):
         print_general_info("STARTUP", "Monad block poller task started.")
     except Exception as e:
         print_general_red(f"STARTUP: Failed to initialize client or start poller: {e}"); yield
-    
     yield 
-    
-    if hasattr(app_instance.state, 'poller_task') and app_instance.state.poller_task:
+    if hasattr(app_instance.state, 'poller_task'):
         app_instance.state.poller_task.cancel()
         try: await app_instance.state.poller_task
         except asyncio.CancelledError: print_general_info("SHUTDOWN", "Poller task successfully cancelled.")
@@ -209,24 +214,22 @@ async def lifespan(app_instance: FastAPI):
 
 app.router.lifespan_context = lifespan
 
-@app.get("/transaction-stream")
+# --- API Endpoints ---
+@app.get("/")
+async def read_root():
+    return {"message": "Monad Visualizer Backend is running."}
+
+@app.get("/transaction-stream") # For the main "blinks" visualizer
 async def transaction_stream(request: Request):
     return StreamingResponse(sse_drip_feed_generator(request), media_type="text/event-stream")
 
-@app.get("/latest-tx-feed")
+@app.get("/latest-tx-feed") # For the new transaction feed UI
 async def latest_tx_feed(request: Request):
     return StreamingResponse(sse_latest_tx_generator(request), media_type="text/event-stream")
 
-@app.get("/", response_class=FileResponse)
-async def read_index():
-    html_file_path = os.path.join(os.path.dirname(__file__), "static", "index.html")
-    if not os.path.exists(html_file_path):
-        return HTMLResponse(content="<html><body><h1>Error 404: index.html not found.</h1></body></html>", status_code=404)
-    return FileResponse(html_file_path)
-
+# --- Uvicorn runner (remains the same) ---
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     module_name = os.path.splitext(os.path.basename(__file__))[0]
     print_general_info("SYSTEM", f"Will run Uvicorn on http://127.0.0.1:{port} for {module_name}:app")
     uvicorn.run(f"{module_name}:app", host="0.0.0.0", port=port, reload=True)
-

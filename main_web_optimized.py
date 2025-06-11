@@ -25,18 +25,17 @@ PRE_FETCH_INTERVAL_SECONDS = 5.0
 PRE_FETCH_BLOCK_COUNT = 100
 ERROR_RETRY_DELAY_SECONDS = 5
 INITIAL_BOOTSTRAP_BLOCK_COUNT = 50
+# --- ADDED MISSING CONSTANT ---
+CATCH_UP_BATCH_SIZE = 100 # How many blocks to fetch in one 'get' call when catching up
 
 # --- Queues, Caches, and Events for DUAL STREAMING ---
-# 1. For the main "blinks" visualizer (block summaries)
 BLOCK_SUMMARY_QUEUE = asyncio.Queue(maxsize=5000)
-# 2. NEW: A rolling cache for the last N transaction details
-LATEST_TRANSACTIONS_CACHE = deque(maxlen=15) # Keep the latest 15 transactions
-# 3. NEW: An event to signal when the latest transactions cache has been updated
+LATEST_TRANSACTIONS_CACHE = deque(maxlen=15)
 LATEST_TX_UPDATE_EVENT = asyncio.Event()
 
-# SSE Configuration
+# --- SSE Configuration ---
 SSE_EVENT_NAME_BLOCKS = "new_block_summary"
-SSE_EVENT_NAME_TXS = "latest_transactions" # NEW: Event name for the transaction feed
+SSE_EVENT_NAME_TXS = "latest_transactions"
 SSE_KEEP_ALIVE_TIMEOUT = 20.0
 
 hypersync_client: hypersync.HypersyncClient | None = None
@@ -60,18 +59,14 @@ async def poll_for_new_blocks():
     
     print_general_info("POLLER", f"Starting block polling from block {current_block}.")
 
-    # --- MODIFIED: Update field_selection to get transaction details ---
     query_obj = Query(
         from_block=1, to_block=None,
         transactions=[TransactionSelection()],
         field_selection=FieldSelection(
             block=[BlockField.NUMBER, BlockField.TIMESTAMP],
             transaction=[
-                TransactionField.BLOCK_NUMBER, # For counting
-                TransactionField.HASH,         # For new feature
-                TransactionField.FROM,         # For new feature
-                TransactionField.TO,           # For new feature
-                TransactionField.VALUE         # For new feature ("MON value")
+                TransactionField.BLOCK_NUMBER, TransactionField.HASH,
+                TransactionField.FROM, TransactionField.TO, TransactionField.VALUE
             ]
         )
     )
@@ -86,19 +81,17 @@ async def poll_for_new_blocks():
             query_obj.from_block = current_block
             query_obj.to_block = min(current_block + PRE_FETCH_BLOCK_COUNT, new_latest_tip + 1)
             
-            print_general_info("POLLER", f"Woke up. Fetching blocks from {query_obj.from_block} to {query_obj.to_block - 1}...")
+            # print_general_info("POLLER", f"Woke up. Fetching blocks from {query_obj.from_block} to {query_obj.to_block - 1}...")
             response = await hypersync_client.get(query_obj)
             
             if not response or not response.data:
                 current_block += 1
                 continue
 
-            # --- MODIFIED: Process full transaction data ---
             tx_counts = defaultdict(int)
             newly_fetched_txs = []
 
             if response.data.transactions:
-                # Iterate backwards to process newest transactions first for the cache
                 for tx in reversed(response.data.transactions):
                     if tx.block_number is not None:
                         tx_counts[tx.block_number] += 1
@@ -109,27 +102,23 @@ async def poll_for_new_blocks():
                             "value": getattr(tx, 'value', '0')
                         })
             
-            # --- NEW: Update the rolling cache and signal the event ---
             if newly_fetched_txs:
-                # The deque will automatically keep only the last N items
-                LATEST_TRANSACTIONS_CACHE.extendleft(newly_fetched_txs) # Use extendleft to add newest items to the front
-                # Signal to the new SSE endpoint that there's new data
+                LATEST_TRANSACTIONS_CACHE.extendleft(newly_fetched_txs)
                 LATEST_TX_UPDATE_EVENT.set()
                 LATEST_TX_UPDATE_EVENT.clear()
 
-            # --- This part for the main visualizer remains the same ---
             sorted_blocks = sorted(response.data.blocks, key=lambda b: b.number or -1)
-            for block in sorted_blocks:
-                block_num = block.number
-                if block_num is None: continue
-                block_summary = {
-                    "block_number": block_num,
-                    "transaction_count": tx_counts.get(block_num, 0),
-                    "timestamp": getattr(block, 'timestamp', None)
-                }
-                await BLOCK_SUMMARY_QUEUE.put(block_summary)
-            
             if sorted_blocks:
+                for block in sorted_blocks:
+                    block_num = block.number
+                    if block_num is None: continue
+                    block_summary = {
+                        "block_number": block_num,
+                        "transaction_count": tx_counts.get(block_num, 0),
+                        "timestamp": getattr(block, 'timestamp', None)
+                    }
+                    await BLOCK_SUMMARY_QUEUE.put(block_summary)
+                
                 print_general_info("POLLER", f"Queued summaries for {len(sorted_blocks)} new blocks. Qsize: {BLOCK_SUMMARY_QUEUE.qsize()}")
             
             current_block = (response.next_block if response.next_block and response.next_block > current_block 
@@ -145,7 +134,7 @@ async def poll_for_new_blocks():
 
 async def sse_drip_feed_generator(request: Request):
     """
-    (UNCHANGED) Streams block summaries for the main visualizer, paced by timestamps.
+    Streams block summaries for the main visualizer, paced by timestamps.
     """
     last_sent_timestamp = None
     while True:
@@ -168,7 +157,6 @@ async def sse_drip_feed_generator(request: Request):
         except asyncio.TimeoutError: yield ": keep-alive\n\n"
         except Exception as e: print_general_red(f"SSE (Blocks) ERROR: {type(e).__name__}: {e}"); await asyncio.sleep(1)
 
-# --- NEW: SSE generator for the latest transaction feed ---
 async def sse_latest_tx_generator(request: Request):
     """
     Streams the full list of latest transactions whenever the cache is updated.
@@ -176,16 +164,12 @@ async def sse_latest_tx_generator(request: Request):
     while True:
         if await request.is_disconnected(): break
         try:
-            # Wait for the poller to signal that the cache has been updated
-            await LATEST_TX_UPDATE_EVENT.wait()
-            
-            # Send the entire contents of the rolling cache
-            # The cache is a deque, convert to list for JSON serialization
+            await asyncio.wait_for(LATEST_TX_UPDATE_EVENT.wait(), timeout=SSE_KEEP_ALIVE_TIMEOUT)
             latest_txs = list(LATEST_TRANSACTIONS_CACHE)
-            
             sse_event = f"event: {SSE_EVENT_NAME_TXS}\ndata: {json.dumps(latest_txs)}\n\n"
             yield sse_event
-
+        except asyncio.TimeoutError:
+            yield ": keep-alive\n\n"
         except asyncio.CancelledError:
             break
         except Exception as e:
@@ -214,8 +198,10 @@ async def lifespan(app_instance: FastAPI):
         print_general_info("STARTUP", "Monad block poller task started.")
     except Exception as e:
         print_general_red(f"STARTUP: Failed to initialize client or start poller: {e}"); yield
+    
     yield 
-    if hasattr(app_instance.state, 'poller_task'):
+    
+    if hasattr(app_instance.state, 'poller_task') and app_instance.state.poller_task:
         app_instance.state.poller_task.cancel()
         try: await app_instance.state.poller_task
         except asyncio.CancelledError: print_general_info("SHUTDOWN", "Poller task successfully cancelled.")
@@ -223,11 +209,10 @@ async def lifespan(app_instance: FastAPI):
 
 app.router.lifespan_context = lifespan
 
-@app.get("/transaction-stream") # This is for the main "blinks" visualizer
+@app.get("/transaction-stream")
 async def transaction_stream(request: Request):
     return StreamingResponse(sse_drip_feed_generator(request), media_type="text/event-stream")
 
-# --- NEW: FastAPI endpoint for the latest transactions feed ---
 @app.get("/latest-tx-feed")
 async def latest_tx_feed(request: Request):
     return StreamingResponse(sse_latest_tx_generator(request), media_type="text/event-stream")
@@ -244,3 +229,4 @@ if __name__ == "__main__":
     module_name = os.path.splitext(os.path.basename(__file__))[0]
     print_general_info("SYSTEM", f"Will run Uvicorn on http://127.0.0.1:{port} for {module_name}:app")
     uvicorn.run(f"{module_name}:app", host="0.0.0.0", port=port, reload=True)
+

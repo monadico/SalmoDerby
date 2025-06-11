@@ -10,13 +10,17 @@ body, html {
 }
 
 #background-video {
-    position: fixed;
+    position: relative;
     top: 0;
     left: 0;
-    width: 100vw; 
+    width: 100vw;
     height: 100vh;
-    object-fit: cover; 
-    z-index: -1; 
+    object-fit: cover;
+    z-index: 1;
+    background-color: #000; /* Fallback color */
+    pointer-events: none; /* Prevent video from capturing mouse events */
+    will-change: transform; /* Optimize for animations */
+    transform: translateZ(0); /* Force GPU acceleration */
 }
 
 #tps-counter {
@@ -47,11 +51,11 @@ body, html {
     border: 1px solid #550;
 }
 
-#star-canvas-container { 
-    position: fixed; 
+#star-canvas-container {
+    position: fixed;
     top: 0;
     left: 0;
-    width: 100%; 
+    width: 100vw;
     height: 100vh; 
     overflow: hidden; 
     z-index: 10; 

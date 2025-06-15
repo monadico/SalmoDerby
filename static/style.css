@@ -1,5 +1,5 @@
-/* style.css */
-@import url('[https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Roboto+Mono:wght@400;700&display=swap](https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Roboto+Mono:wght@400;700&display=swap)');
+/* static/style.css */
+@import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Roboto+Mono:wght@400;700&display=swap');
 
 :root {
     --track-color: #534033;
@@ -59,6 +59,7 @@ body {
 #scoreboard-table td {
     font-family: 'Roboto Mono', monospace;
     word-break: break-all;
+    min-width: 100px; /* Helps with layout consistency */
 }
 
 /* --- Racetrack --- */
@@ -113,30 +114,22 @@ body {
 }
 
 
-/* --- Racer Animation (Using your new sprite) --- */
+/* --- Racer Animation --- */
 
 @keyframes run-sprite {
    from { background-position-x: 0px; }
-   /* Total width of your image */
    to { background-position-x: -768px; }
 }
 
-/* Renamed from .horse to .racer to be more generic */
 .racer {
-    /* --- THESE ARE THE UPDATED VALUES --- */
-    width: 69.82px;  /* Frame Width: 768px / 11 frames */
-    height: 52px;    /* Frame Height: The height of your image */
-    
-    /* Make sure this path is correct! */
-    background-image: url('./salmonad\ run.png');
-    
-    /* 11 steps for 11 frames */
+    width: 69.82px;
+    height: 52px;
+    /* MODIFIED: Path now includes /static/ */
+    background-image: url('salmonad run.png');
     animation: run-sprite 1s steps(11) infinite; 
-
-    /* --- The rest remains the same --- */
     animation-play-state: paused;
     position: absolute;
     left: 10%;
     transform: translateX(-50%);
-    transition: left 0.5s linear;
+    transition: left 1s linear;
 }

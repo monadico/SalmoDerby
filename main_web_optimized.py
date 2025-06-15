@@ -12,7 +12,8 @@ import hypersync
 from hypersync import BlockField, TransactionField, TransactionSelection, ClientConfig, Query, FieldSelection
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse # Import FileResponse
+from fastapi.staticfiles import StaticFiles # Import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
 # --- Configuration ---
@@ -49,50 +50,34 @@ def print_general_yellow(msg, file=sys.stderr): print(f"\033[93mWARNING: {msg}\0
 def print_general_info(msg_prefix, message, file=sys.stderr): print(f"{msg_prefix.upper()} INFO: {message}", file=file, flush=True)
 
 
-# NEW: Re-added the display function for terminal output
 def display_dex_tps(payload: dict):
-    """
-    Clears the terminal and displays the live data from the payload.
-    """
     os.system('cls' if os.name == 'nt' else 'clear')
-    
-    # --- TPS Section ---
     print("--- Live Monad DEX Transactions Per Second (TPS) ---")
     print(f"Tracking {len(DEX_CONTRACTS)} DEXs. Last updated: {time.strftime('%H:%M:%S')}")
     print("--------------------------------------------------")
-
     total_tps = 0
-    # Sort by the original DEX name for consistent order
     sorted_dexs = sorted(DEX_CONTRACTS.keys())
-
     for dex_name in sorted_dexs:
         dex_key = dex_name.lower().replace(' ', '-')
         data = payload.get(dex_key, {"tps": 0})
         tps = data["tps"]
         print(f"{dex_name:<20}: {tps} TPS")
         total_tps += tps
-
     print("--------------------------------------------------")
     print(f"{'TOTAL':<20}: {total_tps} TPS")
-
-    # --- Sample Hashes Section ---
     print("\n--- Latest Sample Transaction Hashes ---")
     for dex_name in sorted_dexs:
         dex_key = dex_name.lower().replace(' ', '-')
         data = payload.get(dex_key, {"hash": "N/A"})
         sample_hash = data["hash"]
         print(f"{dex_name:<20}: {sample_hash}")
-        
     print("\n(FastAPI server is running. Press Ctrl+C to stop)")
 
 
 async def poll_and_produce_data():
     if not hypersync_client:
-        print_general_red("POLLER: Client not initialized.")
         return
-
     tx_selections = [TransactionSelection(to=[address]) for address in DEX_CONTRACTS.values()]
-
     try:
         current_height = await hypersync_client.get_height()
         start_block = max(0, current_height - INITIAL_BOOTSTRAP_BLOCK_COUNT)
@@ -108,19 +93,16 @@ async def poll_and_produce_data():
             transaction=[TransactionField.TO, TransactionField.BLOCK_NUMBER, TransactionField.HASH]
         )
     )
-
     print_general_info("POLLER", f"Starting data polling from block {query.from_block}.")
 
     while True:
         try:
             response = await hypersync_client.get(query)
-
             if response.data and response.data.blocks and response.data.transactions:
                 block_timestamp_map = {
                     block.number: int(block.timestamp, 16)
                     for block in response.data.blocks if block.number is not None and block.timestamp
                 }
-
                 for tx in response.data.transactions:
                     if tx.to and tx.block_number in block_timestamp_map:
                         dex_name = ADDRESS_TO_DEX.get(tx.to.lower())
@@ -130,29 +112,21 @@ async def poll_and_produce_data():
                             if tx.hash:
                                 DEX_SAMPLE_HASHES[dex_name] = tx.hash
 
-            # Calculate TPS and format payload
             payload = {}
             current_unix_time = int(time.time())
-
             for dex_name, timestamps in DEX_TX_TIMESTAMPS.items():
                 while timestamps and timestamps[0] < current_unix_time - TPS_MEMORY_SECONDS:
                     timestamps.popleft()
                 tps = sum(1 for ts in timestamps if ts >= current_unix_time - 1)
                 dex_key = dex_name.lower().replace(' ', '-')
                 payload[dex_key] = {"tps": tps, "hash": DEX_SAMPLE_HASHES[dex_name]}
-
-            # NEW: Call the display function to update the terminal
-            display_dex_tps(payload)
             
-            # Put the payload into the queue for the API
+            display_dex_tps(payload)
             if not DATA_QUEUE.full():
                 await DATA_QUEUE.put(payload)
-
             if response.next_block:
                 query.from_block = response.next_block
-            
             await asyncio.sleep(POLLING_INTERVAL_SECONDS)
-
         except KeyboardInterrupt:
             print_general_yellow("\nPOLLER: Stopping.")
             break
@@ -164,7 +138,6 @@ async def poll_and_produce_data():
 async def derby_data_generator(request: Request):
     while True:
         if await request.is_disconnected():
-            print_general_yellow("SSE: Client disconnected.")
             break
         try:
             payload = await asyncio.wait_for(DATA_QUEUE.get(), timeout=20.0)
@@ -173,7 +146,6 @@ async def derby_data_generator(request: Request):
         except asyncio.TimeoutError:
             yield ": keep-alive\n\n"
 
-# --- FastAPI App Setup ---
 @asynccontextmanager
 async def lifespan(app_instance: FastAPI):
     print_general_info("SYSTEM", "FastAPI application starting up...")
@@ -183,26 +155,16 @@ async def lifespan(app_instance: FastAPI):
         print_general_red("STARTUP: HYPERSYNC_BEARER_TOKEN environment variable not found.")
         yield
         return
-
     try:
         client_config = ClientConfig(url=MONAD_HYPERSYNC_URL, bearer_token=bearer_token)
         hypersync_client = hypersync.HypersyncClient(client_config)
-        print_general_info("STARTUP", f"HypersyncClient initialized for {MONAD_HYPERSYNC_URL}.")
         app_instance.state.poller_task = asyncio.create_task(poll_and_produce_data())
         print_general_info("STARTUP", "Data polling task started.")
     except Exception as e:
         print_general_red(f"STARTUP: Failed to initialize client or start poller: {e}")
-
     yield
-
     if hasattr(app_instance.state, 'poller_task') and app_instance.state.poller_task:
         app_instance.state.poller_task.cancel()
-        try:
-            await app_instance.state.poller_task
-        except asyncio.CancelledError:
-            print_general_info("SHUTDOWN", "Poller task successfully cancelled.")
-    print_general_info("SHUTDOWN", "FastAPI application shutdown complete.")
-
 
 app = FastAPI(title="Monad DEX Derby API", lifespan=lifespan)
 
@@ -214,15 +176,21 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# --- NEW: MOUNT STATIC DIRECTORY ---
+# This line tells FastAPI to serve all files from the 'static' folder
+# under the URL path '/static'.
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# --- MODIFIED: Root endpoint to serve the HTML file ---
 @app.get("/")
 async def read_root():
-    return {"message": "Monad DEX Derby API is running."}
+    # This now returns your main HTML file as the response.
+    return FileResponse('static/index.html')
 
 @app.get("/derby-data")
 async def sse_derby_data(request: Request):
     return StreamingResponse(derby_data_generator(request), media_type="text/event-stream")
 
-# --- Uvicorn runner ---
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     module_name = os.path.splitext(os.path.basename(__file__))[0]

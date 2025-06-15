@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Perpetual Monad Derby</title>
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
     <div class="derby-container">
@@ -21,7 +21,6 @@
                     </tr>
                 </thead>
                 <tbody>
-                    <!-- This table body will be populated by JavaScript -->
                     <tr>
                         <td>LFJ</td>
                         <td id="tps-lfj">0</td>
@@ -69,7 +68,6 @@
         </header>
 
         <main id="racetrack">
-            <!-- Each lane contains a racer div -->
             <div class="lane">
                 <div class="racer" id="racer-lfj"></div>
                 <span class="lane-label">LFJ</span>
@@ -100,5 +98,6 @@
             </div>
         </main>
     </div>
+    <script src="/static/script.js" defer></script>
 </body>
 </html>

@@ -1,16 +1,12 @@
 document.addEventListener('DOMContentLoaded', () => {
 
     // --- Configuration ---
-    // This should match the URL where your Python backend is running.
-    const BACKEND_URL = 'http://127.0.0.1:8000/derby-data'; 
+    // The backend now serves the root, so the data stream is at this relative path
+    const BACKEND_URL = '/derby-data'; 
     const START_LINE_PERCENT = 10;
     const FINISH_LINE_PERCENT = 90;
-    // This factor controls how much distance 1 TPS covers per update.
-    // Adjust this value to make the race faster or slower.
     const SPEED_FACTOR = 0.5;
 
-    // A mapping from the data keys we expect from the backend
-    // to the element IDs in the HTML.
     const DEX_CONFIG = {
         'lfj': { racerId: 'racer-lfj', tpsId: 'tps-lfj', lapsId: 'laps-lfj', hashId: 'hash-lfj' },
         'pancakeswap': { racerId: 'racer-pancakeswap', tpsId: 'tps-pancakeswap', lapsId: 'laps-pancakeswap', hashId: 'hash-pancakeswap' },
@@ -21,8 +17,6 @@ document.addEventListener('DOMContentLoaded', () => {
         'uniswap': { racerId: 'racer-uniswap', tpsId: 'tps-uniswap', lapsId: 'laps-uniswap', hashId: 'hash-uniswap' }
     };
 
-    // --- State Management ---
-    // This object will hold the current progress (position and laps) for each racer.
     const racerState = {};
     for (const key in DEX_CONFIG) {
         racerState[key] = {
@@ -31,26 +25,18 @@ document.addEventListener('DOMContentLoaded', () => {
         };
     }
 
-    // --- Main Logic ---
-
     function connectToServer() {
-        console.log('Connecting to server...');
+        console.log('Connecting to data stream...');
         const eventSource = new EventSource(BACKEND_URL);
 
-        // This function is called every time a new message is received from the server
         eventSource.onmessage = (event) => {
-            // We expect the data to be a JSON string, so we parse it.
             const data = JSON.parse(event.data);
-            
-            // Update each racer based on the new data
             updateRacers(data);
         };
 
-        // Handle connection errors
         eventSource.onerror = (err) => {
             console.error('EventSource failed:', err);
             eventSource.close();
-            // Try to reconnect after a delay
             setTimeout(connectToServer, 5000); 
         };
     }
@@ -63,39 +49,28 @@ document.addEventListener('DOMContentLoaded', () => {
                 const tps = data[dexKey].tps || 0;
                 const hash = data[dexKey].hash || 'N/A';
 
-                // Get the racer's HTML element
                 const racerElement = document.getElementById(config.racerId);
                 if (!racerElement) continue;
 
-                // --- Animation Control ---
-                // If TPS is > 0, the animation should be running. Otherwise, pause it.
                 racerElement.style.animationPlayState = tps > 0 ? 'running' : 'paused';
 
-                // --- Movement Calculation ---
                 const movement = tps * SPEED_FACTOR;
                 state.position += movement;
 
-                // --- Lap Logic ---
-                // Check if the racer has crossed the finish line
                 if (state.position >= FINISH_LINE_PERCENT) {
-                    state.laps++; // Increment lap count
-                    // Calculate the "overshoot" to place the racer accurately on the next lap
+                    state.laps++;
                     const overshoot = state.position - FINISH_LINE_PERCENT;
                     state.position = START_LINE_PERCENT + overshoot;
                 }
 
-                // --- Update UI ---
-                // Move the racer on the screen
                 racerElement.style.left = `${state.position}%`;
                 
-                // Update the scoreboard
                 document.getElementById(config.tpsId).textContent = tps;
                 document.getElementById(config.lapsId).textContent = state.laps;
                 document.getElementById(config.hashId).textContent = hash;
             }
         }
     }
-
-    // Start the connection to the server
+    
     connectToServer();
 });

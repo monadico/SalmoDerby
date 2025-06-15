@@ -1,138 +1,142 @@
-body, html { 
-    margin: 0; 
-    padding: 0;
-    width: 100%;
-    height: 100%;
-    overflow: hidden; 
-    background-color: #000; 
-    font-family: 'Courier New', Courier, monospace; 
-    color: #0f0; 
+/* style.css */
+@import url('[https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Roboto+Mono:wght@400;700&display=swap](https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Roboto+Mono:wght@400;700&display=swap)');
+
+:root {
+    --track-color: #534033;
+    --grass-color: #348442;
+    --lane-line-color: #c2b280;
+    --board-bg: #1a1a1a;
+    --board-text: #00ff41;
 }
 
-#background-video {
-    position: relative;
-    top: 0;
-    left: 0;
-    width: 100vw;
-    height: 100vh;
-    object-fit: cover;
-    z-index: 1;
-    background-color: #000; /* Fallback color */
-    pointer-events: none; /* Prevent video from capturing mouse events */
-    will-change: transform; /* Optimize for animations */
-    transform: translateZ(0); /* Force GPU acceleration */
-}
-
-#tps-counter {
-    position: fixed; 
-    top: 10px;
-    right: 20px;
-    font-size: 1.1em; 
-    color: #0f0; 
-    text-shadow: 0 0 4px #0f0, 0 0 8px #0f0;
-    background-color: rgba(0,0,0,0.8); 
-    padding: 8px 12px;
-    border-radius: 5px;
-    z-index: 20; 
-    border: 1px solid #050;
-}
-
-#performance-counter {
-    position: fixed; 
-    top: 50px; 
-    right: 20px;
-    font-size: 0.9em; 
-    color: #ff0; 
-    text-shadow: 0 0 4px #ff0;
-    background-color: rgba(0,0,0,0.8); 
-    padding: 6px 10px;
-    border-radius: 5px;
-    z-index: 20; 
-    border: 1px solid #550;
-}
-
-#star-canvas-container {
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 100vw;
-    height: 100vh; 
-    overflow: hidden; 
-    z-index: 10; 
-}
-
-canvas#starCanvas {
-    display: block; 
-    width: 100%;
-    height: 100%;
-    cursor: default;
-}
-
-canvas {
-    touch-action: none;
-}
-
-/* --- Live Transaction Feed Styles --- */
-#transaction-feed-container {
-    position: fixed;
-    bottom: 20px;
-    left: 20px;
-    width: 450px;
-    height: 250px;
-    background-color: rgba(0, 20, 0, 0.75);
-    border: 1px solid #0f0;
-    border-radius: 8px;
-    color: #0f0;
-    font-family: 'Courier New', Courier, monospace;
-    font-size: 0.8em;
-    z-index: 30;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-    box-shadow: 0 0 15px rgba(0, 255, 0, 0.2);
-}
-
-.feed-header {
-    padding: 8px;
-    background-color: rgba(0, 50, 0, 0.9);
-    text-align: center;
-    font-weight: bold;
-    text-shadow: 0 0 5px #0f0;
-    border-bottom: 1px solid #0f0;
-}
-
-#transaction-list {
-    list-style-type: none;
-    padding: 0;
+body {
+    background-color: var(--grass-color);
+    font-family: 'Roboto Mono', monospace;
+    color: white;
     margin: 0;
-    overflow-y: auto;
-    flex-grow: 1;
+    padding: 20px;
+    overflow-x: hidden;
 }
 
-/* UPDATED/NEW Styles for Clickable Links */
-#transaction-list li {
-    padding: 0; 
-    border-bottom: 1px solid #030;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis; 
+.derby-container {
+    max-width: 1200px;
+    margin: 0 auto;
+    border: 5px solid #fff;
+    background-color: var(--board-bg);
+    padding: 10px;
 }
 
-#transaction-list li a {
-    display: block;
-    padding: 6px 8px;
-    text-decoration: none;
-    color: inherit;
-    transition: background-color 0.2s ease-in-out;
+/* --- Scoreboard --- */
+#scoreboard {
+    text-align: center;
+    padding: 20px;
+    border-bottom: 5px solid #fff;
 }
 
-#transaction-list li a:hover {
-    background-color: rgba(0, 255, 0, 0.15);
-    cursor: pointer;
+#scoreboard h1 {
+    font-family: 'Press Start 2P', cursive;
+    color: var(--board-text);
+    margin: 0 0 10px 0;
 }
 
-/* Color coding for different parts of the transaction */
-#transaction-list .tx-hash { color: #0f0; }
-#transaction-list .tx-from { color: #0ff; }
-#transaction-list .tx-to { color: #ff0; }
-#transaction-list .tx-value { color: #fff; font-weight: bold; }
+#scoreboard-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 15px;
+}
+
+#scoreboard-table th, #scoreboard-table td {
+    padding: 8px;
+    border: 1px solid #444;
+    text-align: left;
+}
+
+#scoreboard-table th {
+    background-color: #333;
+    font-weight: 700;
+}
+
+#scoreboard-table td {
+    font-family: 'Roboto Mono', monospace;
+    word-break: break-all;
+}
+
+/* --- Racetrack --- */
+#racetrack {
+    position: relative;
+    width: 100%;
+    padding: 20px 0;
+    background-color: var(--track-color);
+    border-top: 2px dashed #fff;
+}
+
+#racetrack::before, #racetrack::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    width: 5px;
+    height: 100%;
+    background-image: linear-gradient(to bottom, #fff 50%, #000 50%);
+    background-size: 10px 10px;
+}
+
+#racetrack::before {
+    left: 10%; 
+}
+
+#racetrack::after {
+    right: 10%;
+}
+
+
+.lane {
+    height: 60px;
+    border-bottom: 2px dashed var(--lane-line-color);
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+
+.lane:last-child {
+    border-bottom: none;
+}
+
+.lane-label {
+    position: absolute;
+    left: 10px;
+    font-size: 12px;
+    font-weight: bold;
+    color: #fff;
+    background-color: rgba(0,0,0,0.5);
+    padding: 2px 5px;
+    border-radius: 3px;
+}
+
+
+/* --- Racer Animation (Using your new sprite) --- */
+
+@keyframes run-sprite {
+   from { background-position-x: 0px; }
+   /* Total width of your image */
+   to { background-position-x: -768px; }
+}
+
+/* Renamed from .horse to .racer to be more generic */
+.racer {
+    /* --- THESE ARE THE UPDATED VALUES --- */
+    width: 69.82px;  /* Frame Width: 768px / 11 frames */
+    height: 52px;    /* Frame Height: The height of your image */
+    
+    /* Make sure this path is correct! */
+    background-image: url('./salmonad\ run.png');
+    
+    /* 11 steps for 11 frames */
+    animation: run-sprite 1s steps(11) infinite; 
+
+    /* --- The rest remains the same --- */
+    animation-play-state: paused;
+    position: absolute;
+    left: 10%;
+    transform: translateX(-50%);
+    transition: left 0.5s linear;
+}

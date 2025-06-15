@@ -1,29 +1,104 @@
 <!DOCTYPE html>
 <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Monad Live Transaction Visualizer</title>
-        <link rel="stylesheet" href="style.css"> 
-    </head>
-    <body>
-        <video autoplay loop muted playsinline id="background-video">
-            <source src="background_video.mp4" type="video/mp4">
-            Your browser does not support the video tag.
-        </video>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Perpetual Monad Derby</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="derby-container">
+        <header id="scoreboard">
+            <h1>Perpetual Monad Derby</h1>
+            <p>Live DEX Activity on Monad Testnet</p>
+            <table id="scoreboard-table">
+                <thead>
+                    <tr>
+                        <th>DEX Name</th>
+                        <th>Live TPS</th>
+                        <th>Laps Completed</th>
+                        <th>Latest TX Hash</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <!-- This table body will be populated by JavaScript -->
+                    <tr>
+                        <td>LFJ</td>
+                        <td id="tps-lfj">0</td>
+                        <td id="laps-lfj">0</td>
+                        <td id="hash-lfj">N/A</td>
+                    </tr>
+                    <tr>
+                        <td>PancakeSwap</td>
+                        <td id="tps-pancakeswap">0</td>
+                        <td id="laps-pancakeswap">0</td>
+                        <td id="hash-pancakeswap">N/A</td>
+                    </tr>
+                    <tr>
+                        <td>Bean Exchange</td>
+                        <td id="tps-bean-exchange">0</td>
+                        <td id="laps-bean-exchange">0</td>
+                        <td id="hash-bean-exchange">N/A</td>
+                    </tr>
+                    <tr>
+                        <td>Ambient Finance</td>
+                        <td id="tps-ambient-finance">0</td>
+                        <td id="laps-ambient-finance">0</td>
+                        <td id="hash-ambient-finance">N/A</td>
+                    </tr>
+                    <tr>
+                        <td>Izumi Finance</td>
+                        <td id="tps-izumi-finance">0</td>
+                        <td id="laps-izumi-finance">0</td>
+                        <td id="hash-izumi-finance">N/A</td>
+                    </tr>
+                    <tr>
+                        <td>Octoswap</td>
+                        <td id="tps-octoswap">0</td>
+                        <td id="laps-octoswap">0</td>
+                        <td id="hash-octoswap">N/A</td>
+                    </tr>
+                    <tr>
+                        <td>Uniswap</td>
+                        <td id="tps-uniswap">0</td>
+                        <td id="laps-uniswap">0</td>
+                        <td id="hash-uniswap">N/A</td>
+                    </tr>
+                </tbody>
+            </table>
+        </header>
 
-        <div id="tps-counter">TPS: 0.0</div>
-        <div id="performance-counter">Stars: 0 | FPS: 0</div>
-        
-        <div id="transaction-feed-container">
-            <div class="feed-header">LATEST TRANSACTIONS</div>
-            <ul id="transaction-list"></ul>
-        </div>
-
-        <div id="star-canvas-container">
-            <canvas id="starCanvas"></canvas>
-        </div>
-
-        <script src="script.js"></script> 
-    </body>
+        <main id="racetrack">
+            <!-- Each lane contains a racer div -->
+            <div class="lane">
+                <div class="racer" id="racer-lfj"></div>
+                <span class="lane-label">LFJ</span>
+            </div>
+            <div class="lane">
+                <div class="racer" id="racer-pancakeswap"></div>
+                <span class="lane-label">PancakeSwap</span>
+            </div>
+            <div class="lane">
+                <div class="racer" id="racer-bean-exchange"></div>
+                <span class="lane-label">Bean Exchange</span>
+            </div>
+            <div class="lane">
+                <div class="racer" id="racer-ambient-finance"></div>
+                <span class="lane-label">Ambient Finance</span>
+            </div>
+            <div class="lane">
+                <div class="racer" id="racer-izumi-finance"></div>
+                <span class="lane-label">Izumi Finance</span>
+            </div>
+             <div class="lane">
+                <div class="racer" id="racer-octoswap"></div>
+                <span class="lane-label">Octoswap</span>
+            </div>
+             <div class="lane">
+                <div class="racer" id="racer-uniswap"></div>
+                <span class="lane-label">Uniswap</span>
+            </div>
+        </main>
+    </div>
+</body>
 </html>

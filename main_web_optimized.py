@@ -1,3 +1,4 @@
+# derby_server.py
 import asyncio
 import json
 import os
@@ -7,13 +8,14 @@ import traceback
 import uvicorn
 from contextlib import asynccontextmanager
 from collections import defaultdict, deque
+from typing import List, Dict, Any
 
 import hypersync
 from hypersync import BlockField, TransactionField, TransactionSelection, ClientConfig, Query, FieldSelection
 from dotenv import load_dotenv
-from fastapi import FastAPI, Request
-from fastapi.responses import StreamingResponse, FileResponse # Import FileResponse
-from fastapi.staticfiles import StaticFiles # Import StaticFiles
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.responses import StreamingResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
 # --- Configuration ---
@@ -24,23 +26,6 @@ ERROR_RETRY_DELAY_SECONDS = 5
 INITIAL_BOOTSTRAP_BLOCK_COUNT = 200
 TPS_MEMORY_SECONDS = 10
 
-# --- DEX Contract Information ---
-DEX_CONTRACTS = {
-    "LFJ": "0x45A62B090DF48243F12A21897e7ed91863E2c86b",
-    "PancakeSwap": "0x94D220C58A23AE0c2eE29344b00A30D1c2d9F1bc",
-    "Bean Exchange": "0xCa810D095e90Daae6e867c19DF6D9A8C56db2c89",
-    "Ambient Finance": "0x88B96aF200c8a9c35442C8AC6cd3D22695AaE4F0",
-    "Izumi Finance": "0xf6ffe4f3fdc8bbb7f70ffd48e61f17d1e343ddfd",
-    "Octoswap": "0xb6091233aAcACbA45225a2B2121BBaC807aF4255",
-    "Uniswap": "0x3aE6D8A282D67893e17AA70ebFFb33EE5aa65893",
-}
-
-# --- Data Structures & Communication ---
-DEX_TX_TIMESTAMPS = {dex_name: deque() for dex_name in DEX_CONTRACTS}
-DEX_SAMPLE_HASHES = {dex_name: "N/A" for dex_name in DEX_CONTRACTS}
-ADDRESS_TO_DEX = {v.lower(): k for k, v in DEX_CONTRACTS.items()}
-DATA_QUEUE = asyncio.Queue(maxsize=10)
-
 # --- Global State ---
 hypersync_client: hypersync.HypersyncClient | None = None
 
@@ -50,34 +35,100 @@ def print_general_yellow(msg, file=sys.stderr): print(f"\033[93mWARNING: {msg}\0
 def print_general_info(msg_prefix, message, file=sys.stderr): print(f"{msg_prefix.upper()} INFO: {message}", file=file, flush=True)
 
 
-def display_dex_tps(payload: dict):
-    os.system('cls' if os.name == 'nt' else 'clear')
-    print("--- Live Monad DEX Transactions Per Second (TPS) ---")
-    print(f"Tracking {len(DEX_CONTRACTS)} DEXs. Last updated: {time.strftime('%H:%M:%S')}")
-    print("--------------------------------------------------")
-    total_tps = 0
-    sorted_dexs = sorted(DEX_CONTRACTS.keys())
-    for dex_name in sorted_dexs:
-        dex_key = dex_name.lower().replace(' ', '-')
-        data = payload.get(dex_key, {"tps": 0})
-        tps = data["tps"]
-        print(f"{dex_name:<20}: {tps} TPS")
-        total_tps += tps
-    print("--------------------------------------------------")
-    print(f"{'TOTAL':<20}: {total_tps} TPS")
-    print("\n--- Latest Sample Transaction Hashes ---")
-    for dex_name in sorted_dexs:
-        dex_key = dex_name.lower().replace(' ', '-')
-        data = payload.get(dex_key, {"hash": "N/A"})
-        sample_hash = data["hash"]
-        print(f"{dex_name:<20}: {sample_hash}")
-    print("\n(FastAPI server is running. Press Ctrl+C to stop)")
+# ==========================================================
+# === DYNAMIC QUERY & POLLING LOGIC
+# ==========================================================
 
+async def get_contracts_deployed_by(deployer_address: str) -> List[str]:
+    """
+    Performs a pre-query to find all contract addresses created by a deployer.
+    """
+    print_general_info("DEPLOYER_QUERY", f"Fetching contracts deployed by {deployer_address}...")
+    try:
+        query = Query(
+            from_block=0,
+            transactions=[TransactionSelection(from_=[deployer_address])],
+            field_selection=FieldSelection(
+                transaction=[TransactionField.FROM, TransactionField.TO, TransactionField.RECEIPT_CONTRACT_ADDRESS]
+            )
+        )
+        response = await hypersync_client.get(query)
+        
+        # A contract creation tx is one where the 'to' field is null, and a contract address is in the receipt.
+        deployed_contracts = [
+            tx.receipt_contract_address
+            for tx in response.data.transactions
+            if tx.to is None and tx.receipt_contract_address
+        ]
+        print_general_info("DEPLOYER_QUERY", f"Found {len(deployed_contracts)} contracts for {deployer_address}.")
+        return deployed_contracts
+    except Exception as e:
+        print_general_red(f"Failed to get deployed contracts for {deployer_address}: {e}")
+        return []
 
-async def poll_and_produce_data():
-    if not hypersync_client:
+async def build_dynamic_query(config: List[Dict[str, Any]]) -> List[TransactionSelection]:
+    """
+    Builds a list of TransactionSelection objects based on the user's config.
+    """
+    tx_selections = []
+    for entity in config:
+        addresses_str = entity.get("addresses", "")
+        # Sanitize addresses: split by comma/space, trim whitespace, and filter out empty strings.
+        addresses = [addr.strip().lower() for addr in addresses_str.replace(",", " ").split() if addr.strip()]
+        if not addresses:
+            continue
+
+        criteria = entity.get("criteria")
+        
+        if criteria == "to":
+            tx_selections.append(TransactionSelection(to=addresses))
+        elif criteria == "from":
+            tx_selections.append(TransactionSelection(from_=addresses))
+        elif criteria == "both":
+            tx_selections.append(TransactionSelection(to=addresses))
+            tx_selections.append(TransactionSelection(from_=addresses))
+        elif criteria == "deployer":
+            # This assumes the user inputs ONE deployer address for this option.
+            if addresses:
+                deployed_contracts = await get_contracts_deployed_by(addresses[0])
+                if deployed_contracts:
+                    tx_selections.append(TransactionSelection(to=deployed_contracts))
+
+    return tx_selections
+
+async def derby_data_generator(request: Request):
+    """
+    This is the main, per-client worker. It parses the config, builds a query,
+    and runs an independent polling loop for this specific client.
+    """
+    # 1. Parse config from URL
+    config_str = request.query_params.get('config', '[]')
+    try:
+        config = json.loads(config_str)
+        if not isinstance(config, list): raise ValueError("Config must be a list.")
+    except (json.JSONDecodeError, ValueError) as e:
+        print_general_red(f"Invalid config provided: {e}")
         return
-    tx_selections = [TransactionSelection(to=[address]) for address in DEX_CONTRACTS.values()]
+
+    # 2. Build the dynamic hypersync query
+    tx_selections = await build_dynamic_query(config)
+    if not tx_selections:
+        print_general_yellow("No valid entities to track in the provided config.")
+        return
+
+    # 3. Set up state for THIS client's race
+    entity_timestamps = {f"entity-{i}": deque() for i in range(len(config))}
+    entity_hashes = {f"entity-{i}": "N/A" for i in range(len(config))}
+    
+    # Create a reverse mapping from address to entity index for this specific config
+    address_to_entity_map = {}
+    for i, entity in enumerate(config):
+        entity_id = f"entity-{i}"
+        addresses = [addr.strip().lower() for addr in entity.get("addresses", "").replace(",", " ").split() if addr.strip()]
+        for addr in addresses:
+            # This simple map might have collisions if addresses are in multiple entities, but it's okay for this purpose.
+            address_to_entity_map[addr] = entity_id
+
     try:
         current_height = await hypersync_client.get_height()
         start_block = max(0, current_height - INITIAL_BOOTSTRAP_BLOCK_COUNT)
@@ -90,62 +141,65 @@ async def poll_and_produce_data():
         transactions=tx_selections,
         field_selection=FieldSelection(
             block=[BlockField.NUMBER, BlockField.TIMESTAMP],
-            transaction=[TransactionField.TO, TransactionField.BLOCK_NUMBER, TransactionField.HASH]
+            transaction=[TransactionField.FROM, TransactionField.TO, TransactionField.BLOCK_NUMBER, TransactionField.HASH]
         )
     )
-    print_general_info("POLLER", f"Starting data polling from block {query.from_block}.")
 
+    # 4. Start the polling loop for this client
     while True:
+        if await request.is_disconnected():
+            print_general_yellow("Client disconnected, stopping their polling loop.")
+            break
+        
         try:
             response = await hypersync_client.get(query)
-            if response.data and response.data.blocks and response.data.transactions:
-                block_timestamp_map = {
-                    block.number: int(block.timestamp, 16)
-                    for block in response.data.blocks if block.number is not None and block.timestamp
-                }
-                for tx in response.data.transactions:
-                    if tx.to and tx.block_number in block_timestamp_map:
-                        dex_name = ADDRESS_TO_DEX.get(tx.to.lower())
-                        if dex_name:
-                            timestamp = block_timestamp_map[tx.block_number]
-                            DEX_TX_TIMESTAMPS[dex_name].append(timestamp)
-                            if tx.hash:
-                                DEX_SAMPLE_HASHES[dex_name] = tx.hash
-
-            payload = {}
-            current_unix_time = int(time.time())
-            for dex_name, timestamps in DEX_TX_TIMESTAMPS.items():
-                while timestamps and timestamps[0] < current_unix_time - TPS_MEMORY_SECONDS:
-                    timestamps.popleft()
-                tps = sum(1 for ts in timestamps if ts >= current_unix_time - 1)
-                dex_key = dex_name.lower().replace(' ', '-')
-                payload[dex_key] = {"tps": tps, "hash": DEX_SAMPLE_HASHES[dex_name]}
             
-            display_dex_tps(payload)
-            if not DATA_QUEUE.full():
-                await DATA_QUEUE.put(payload)
+            latest_block_time = int(time.time())
+            if response.data and response.data.blocks:
+                timestamps_in_batch = [int(b.timestamp, 16) for b in response.data.blocks if b.timestamp]
+                if timestamps_in_batch:
+                    latest_block_time = max(timestamps_in_batch)
+
+                block_timestamp_map = {b.number: int(b.timestamp, 16) for b in response.data.blocks if b.number and b.timestamp}
+
+                for tx in response.data.transactions:
+                    if tx.block_number in block_timestamp_map:
+                        # Determine which entity this transaction belongs to
+                        # This is a simplified check; a tx could match multiple entities.
+                        # We just assign it to the first one it matches.
+                        matched_entity_id = None
+                        if tx.to and tx.to.lower() in address_to_entity_map:
+                            matched_entity_id = address_to_entity_map[tx.to.lower()]
+                        elif tx.from_ and tx.from_.lower() in address_to_entity_map:
+                            matched_entity_id = address_to_entity_map[tx.from_.lower()]
+                        
+                        if matched_entity_id:
+                            timestamp = block_timestamp_map[tx.block_number]
+                            entity_timestamps[matched_entity_id].append(timestamp)
+                            if tx.hash:
+                                entity_hashes[matched_entity_id] = tx.hash
+            
+            payload = {}
+            for entity_id, timestamps in entity_timestamps.items():
+                while timestamps and timestamps[0] < latest_block_time - TPS_MEMORY_SECONDS:
+                    timestamps.popleft()
+                tps = sum(1 for ts in timestamps if ts >= latest_block_time - 1)
+                payload[entity_id] = {"tps": tps, "hash": entity_hashes[entity_id]}
+
+            sse_message = f"data: {json.dumps(payload)}\n\n"
+            yield sse_message
+
             if response.next_block:
                 query.from_block = response.next_block
             await asyncio.sleep(POLLING_INTERVAL_SECONDS)
-        except KeyboardInterrupt:
-            print_general_yellow("\nPOLLER: Stopping.")
-            break
+
         except Exception as e:
-            print_general_red(f"POLLER ERROR: {type(e).__name__}: {e}")
-            traceback.print_exc(file=sys.stderr)
-            await asyncio.sleep(ERROR_RETRY_DELAY_SECONDS)
-
-async def derby_data_generator(request: Request):
-    while True:
-        if await request.is_disconnected():
+            print_general_red(f"Error in client polling loop: {e}")
             break
-        try:
-            payload = await asyncio.wait_for(DATA_QUEUE.get(), timeout=20.0)
-            sse_message = f"data: {json.dumps(payload)}\n\n"
-            yield sse_message
-        except asyncio.TimeoutError:
-            yield ": keep-alive\n\n"
 
+# ==========================================================
+# === FASTAPI APP SETUP
+# ==========================================================
 @asynccontextmanager
 async def lifespan(app_instance: FastAPI):
     print_general_info("SYSTEM", "FastAPI application starting up...")
@@ -156,15 +210,14 @@ async def lifespan(app_instance: FastAPI):
         yield
         return
     try:
+        # The client is shared across all requests
         client_config = ClientConfig(url=MONAD_HYPERSYNC_URL, bearer_token=bearer_token)
         hypersync_client = hypersync.HypersyncClient(client_config)
-        app_instance.state.poller_task = asyncio.create_task(poll_and_produce_data())
-        print_general_info("STARTUP", "Data polling task started.")
+        print_general_info("STARTUP", "HypersyncClient initialized.")
     except Exception as e:
-        print_general_red(f"STARTUP: Failed to initialize client or start poller: {e}")
+        print_general_red(f"STARTUP: Failed to initialize client: {e}")
     yield
-    if hasattr(app_instance.state, 'poller_task') and app_instance.state.poller_task:
-        app_instance.state.poller_task.cancel()
+    print_general_info("SHUTDOWN", "FastAPI application shutdown complete.")
 
 app = FastAPI(title="Monad DEX Derby API", lifespan=lifespan)
 
@@ -176,19 +229,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- NEW: MOUNT STATIC DIRECTORY ---
-# This line tells FastAPI to serve all files from the 'static' folder
-# under the URL path '/static'.
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# --- MODIFIED: Root endpoint to serve the HTML file ---
 @app.get("/")
 async def read_root():
-    # This now returns your main HTML file as the response.
     return FileResponse('static/index.html')
 
 @app.get("/derby-data")
 async def sse_derby_data(request: Request):
+    """
+    Streams live data based on the 'config' query parameter.
+    """
+    config = request.query_params.get('config')
+    if not config:
+        raise HTTPException(status_code=400, detail="Missing 'config' query parameter.")
     return StreamingResponse(derby_data_generator(request), media_type="text/event-stream")
 
 if __name__ == "__main__":

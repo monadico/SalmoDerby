@@ -7,97 +7,61 @@
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
+
+    <!-- ============================================= -->
+    <!-- ===== CONFIGURATION MODAL (Initially Hidden) ===== -->
+    <!-- ============================================= -->
+    <div id="config-overlay" class="hidden">
+        <div id="config-modal">
+            <h2>Derby Configuration</h2>
+            <p>Define up to 8 entities to race against each other.</p>
+            
+            <form id="config-form">
+                <div id="entity-slots-container">
+                    <!-- JavaScript will dynamically add entity slots here. -->
+                </div>
+
+                <div class="form-actions">
+                    <button type="button" id="add-entity-btn">+ Add Another Entity</button>
+                    <button type="submit" id="update-race-btn">Update Race</button>
+                </div>
+            </form>
+            <button id="close-modal-btn" title="Close">X</button>
+        </div>
+    </div>
+
+
+    <!-- ============================================= -->
+    <!-- ===== MAIN DERBY VISUALIZATION ===== -->
+    <!-- ============================================= -->
     <div class="derby-container">
         <header id="scoreboard">
-            <h1>Perpetual Monad Derby</h1>
-            <p>Live DEX Activity on Monad Testnet</p>
+            <div class="scoreboard-header">
+                <h1>Perpetual Monad Derby</h1>
+                <button id="show-config-btn">⚙️ Configure Race</button>
+            </div>
+            <p>Live On-Chain Activity on Monad Testnet</p>
             <table id="scoreboard-table">
                 <thead>
                     <tr>
-                        <th>DEX Name</th>
+                        <th>Entity Name</th>
                         <th>Live TPS</th>
                         <th>Laps Completed</th>
                         <th>Latest TX Hash</th>
                     </tr>
                 </thead>
-                <tbody>
-                    <tr>
-                        <td>LFJ</td>
-                        <td id="tps-lfj">0</td>
-                        <td id="laps-lfj">0</td>
-                        <td id="hash-lfj">N/A</td>
-                    </tr>
-                    <tr>
-                        <td>PancakeSwap</td>
-                        <td id="tps-pancakeswap">0</td>
-                        <td id="laps-pancakeswap">0</td>
-                        <td id="hash-pancakeswap">N/A</td>
-                    </tr>
-                    <tr>
-                        <td>Bean Exchange</td>
-                        <td id="tps-bean-exchange">0</td>
-                        <td id="laps-bean-exchange">0</td>
-                        <td id="hash-bean-exchange">N/A</td>
-                    </tr>
-                    <tr>
-                        <td>Ambient Finance</td>
-                        <td id="tps-ambient-finance">0</td>
-                        <td id="laps-ambient-finance">0</td>
-                        <td id="hash-ambient-finance">N/A</td>
-                    </tr>
-                    <tr>
-                        <td>Izumi Finance</td>
-                        <td id="tps-izumi-finance">0</td>
-                        <td id="laps-izumi-finance">0</td>
-                        <td id="hash-izumi-finance">N/A</td>
-                    </tr>
-                    <tr>
-                        <td>Octoswap</td>
-                        <td id="tps-octoswap">0</td>
-                        <td id="laps-octoswap">0</td>
-                        <td id="hash-octoswap">N/A</td>
-                    </tr>
-                    <tr>
-                        <td>Uniswap</td>
-                        <td id="tps-uniswap">0</td>
-                        <td id="laps-uniswap">0</td>
-                        <td id="hash-uniswap">N/A</td>
-                    </tr>
+                <tbody id="scoreboard-body">
+                    <!-- JavaScript will dynamically populate this table -->
                 </tbody>
             </table>
         </header>
 
         <main id="racetrack">
-            <div class="lane">
-                <div class="racer" id="racer-lfj"></div>
-                <span class="lane-label">LFJ</span>
-            </div>
-            <div class="lane">
-                <div class="racer" id="racer-pancakeswap"></div>
-                <span class="lane-label">PancakeSwap</span>
-            </div>
-            <div class="lane">
-                <div class="racer" id="racer-bean-exchange"></div>
-                <span class="lane-label">Bean Exchange</span>
-            </div>
-            <div class="lane">
-                <div class="racer" id="racer-ambient-finance"></div>
-                <span class="lane-label">Ambient Finance</span>
-            </div>
-            <div class="lane">
-                <div class="racer" id="racer-izumi-finance"></div>
-                <span class="lane-label">Izumi Finance</span>
-            </div>
-             <div class="lane">
-                <div class="racer" id="racer-octoswap"></div>
-                <span class="lane-label">Octoswap</span>
-            </div>
-             <div class="lane">
-                <div class="racer" id="racer-uniswap"></div>
-                <span class="lane-label">Uniswap</span>
-            </div>
+            <!-- JavaScript will dynamically populate this with lanes and racers -->
         </main>
     </div>
+
+    <!-- The defer attribute ensures the script runs after the document is parsed -->
     <script src="/static/script.js" defer></script>
 </body>
 </html>

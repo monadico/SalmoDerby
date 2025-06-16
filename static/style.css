@@ -1,5 +1,4 @@
-/* static/style.css */
-@import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Roboto+Mono:wght@400;700&display=swap');
+@import url('[https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Roboto+Mono:wght@400;700&display=swap](https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Roboto+Mono:wght@400;700&display=swap)');
 
 :root {
     --track-color: #534033;
@@ -7,6 +6,8 @@
     --lane-line-color: #c2b280;
     --board-bg: #1a1a1a;
     --board-text: #00ff41;
+    --modal-bg: #2c2c2c;
+    --modal-border: #555;
 }
 
 body {
@@ -28,15 +29,46 @@ body {
 
 /* --- Scoreboard --- */
 #scoreboard {
-    text-align: center;
     padding: 20px;
     border-bottom: 5px solid #fff;
+}
+
+.scoreboard-header {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    position: relative;
+    text-align: center;
 }
 
 #scoreboard h1 {
     font-family: 'Press Start 2P', cursive;
     color: var(--board-text);
-    margin: 0 0 10px 0;
+    margin: 0;
+    font-size: 1.5em;
+}
+
+#show-config-btn {
+    position: absolute;
+    right: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    background: #444;
+    border: 2px solid #666;
+    color: white;
+    font-size: 1.5em;
+    cursor: pointer;
+    border-radius: 5px;
+    padding: 5px 10px;
+}
+#show-config-btn:hover {
+    background: #555;
+}
+
+
+#scoreboard p {
+    text-align: center;
+    margin: 10px 0 15px 0;
 }
 
 #scoreboard-table {
@@ -49,17 +81,12 @@ body {
     padding: 8px;
     border: 1px solid #444;
     text-align: left;
+    word-break: break-all;
 }
 
 #scoreboard-table th {
     background-color: #333;
     font-weight: 700;
-}
-
-#scoreboard-table td {
-    font-family: 'Roboto Mono', monospace;
-    word-break: break-all;
-    min-width: 100px; /* Helps with layout consistency */
 }
 
 /* --- Racetrack --- */
@@ -69,6 +96,7 @@ body {
     padding: 20px 0;
     background-color: var(--track-color);
     border-top: 2px dashed #fff;
+    min-height: 100px;
 }
 
 #racetrack::before, #racetrack::after {
@@ -81,13 +109,8 @@ body {
     background-size: 10px 10px;
 }
 
-#racetrack::before {
-    left: 10%; 
-}
-
-#racetrack::after {
-    right: 10%;
-}
+#racetrack::before { left: 10%; }
+#racetrack::after { right: 10%; }
 
 
 .lane {
@@ -97,10 +120,7 @@ body {
     display: flex;
     align-items: center;
 }
-
-.lane:last-child {
-    border-bottom: none;
-}
+.lane:last-child { border-bottom: none; }
 
 .lane-label {
     position: absolute;
@@ -113,9 +133,7 @@ body {
     border-radius: 3px;
 }
 
-
 /* --- Racer Animation --- */
-
 @keyframes run-sprite {
    from { background-position-x: 0px; }
    to { background-position-x: -768px; }
@@ -124,12 +142,146 @@ body {
 .racer {
     width: 69.82px;
     height: 52px;
-    /* MODIFIED: Path now includes /static/ */
-    background-image: url('salmonad run.png');
+    background-image: url('/static/Design sem nome(1).png');
     animation: run-sprite 1s steps(11) infinite; 
     animation-play-state: paused;
     position: absolute;
     left: 10%;
     transform: translateX(-50%);
     transition: left 1s linear;
+}
+
+/* =========================== */
+/* === CONFIGURATION MODAL === */
+/* =========================== */
+#config-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.7);
+    z-index: 1000;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+#config-modal {
+    background-color: var(--modal-bg);
+    padding: 25px;
+    border-radius: 10px;
+    border: 3px solid var(--modal-border);
+    width: 90%;
+    max-width: 800px;
+    max-height: 90vh;
+    overflow-y: auto;
+    position: relative;
+    box-shadow: 0 5px 25px rgba(0,0,0,0.5);
+}
+
+#config-modal h2 {
+    font-family: 'Press Start 2P', cursive;
+    margin-top: 0;
+    text-align: center;
+}
+
+.entity-slot {
+    background-color: #3a3a3a;
+    border: 2px solid var(--modal-border);
+    border-radius: 5px;
+    padding: 15px;
+    margin-bottom: 15px;
+    position: relative;
+}
+
+.remove-entity-btn {
+    position: absolute;
+    top: 5px;
+    right: 5px;
+    background-color: #c0392b;
+    border: none;
+    color: white;
+    width: 25px;
+    height: 25px;
+    border-radius: 50%;
+    cursor: pointer;
+    font-weight: bold;
+}
+
+.slot-header {
+    margin-bottom: 10px;
+}
+
+#config-modal label {
+    display: block;
+    margin-bottom: 5px;
+    font-weight: bold;
+    font-size: 0.9em;
+}
+
+#config-modal input[type="text"],
+#config-modal textarea {
+    width: 100%;
+    background-color: #1a1a1a;
+    border: 1px solid var(--modal-border);
+    color: white;
+    padding: 8px;
+    border-radius: 4px;
+    box-sizing: border-box;
+}
+
+.slot-criteria {
+    margin-top: 15px;
+}
+.radio-group {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 15px;
+}
+.radio-group label {
+    font-weight: normal;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    cursor: pointer;
+}
+
+.form-actions {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 20px;
+}
+
+#add-entity-btn, #update-race-btn {
+    padding: 10px 20px;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    font-family: 'Press Start 2P', cursive;
+    font-size: 0.8em;
+}
+
+#add-entity-btn {
+    background-color: #27ae60;
+    color: white;
+}
+#update-race-btn {
+    background-color: var(--board-text);
+    color: var(--board-bg);
+}
+
+#close-modal-btn {
+    position: absolute;
+    top: 10px;
+    right: 15px;
+    background: none;
+    border: none;
+    color: white;
+    font-size: 2em;
+    cursor: pointer;
+}
+
+.hidden {
+    display: none !important;
 }

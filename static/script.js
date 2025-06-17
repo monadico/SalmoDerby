@@ -1,229 +1,345 @@
-document.addEventListener('DOMContentLoaded', () => {
-
-    // --- Default Preset Configuration ---
-    const DEFAULT_DEX_CONFIG = [
-        { name: "LFJ", addresses: "0x45A62B090DF48243F12A21897e7ed91863E2c86b", criteria: "to" },
-        { name: "PancakeSwap", addresses: "0x94D220C58A23AE0c2eE29344b00A30D1c2d9F1bc", criteria: "to" },
-        { name: "Bean Exchange", addresses: "0xCa810D095e90Daae6e867c19DF6D9A8C56db2c89", criteria: "to" },
-        { name: "Ambient Finance", addresses: "0x88B96aF200c8a9c35442C8AC6cd3D22695AaE4F0", criteria: "to" },
-        { name: "Izumi Finance", addresses: "0xf6ffe4f3fdc8bbb7f70ffd48e61f17d1e343ddfd", criteria: "to" },
-        { name: "Octoswap", addresses: "0xb6091233aAcACbA45225a2B2121BBaC807aF4255", criteria: "to" },
-        { name: "Uniswap", addresses: "0x3aE6D8A282D67893e17AA70ebFFb33EE5aa65893", criteria: "to" }
-    ];
-
-    // --- Global State ---
-    let activeEventSource = null;
-    let currentConfig = [];
-    const racerState = {};
-    const START_LINE_PERCENT = 10;
-    const FINISH_LINE_PERCENT = 90;
-    const SPEED_FACTOR = 0.5;
-
-    // --- DOM Elements ---
-    const scoreboardBody = document.getElementById('scoreboard-body');
-    const racetrack = document.getElementById('racetrack');
-    const configOverlay = document.getElementById('config-overlay');
-    const showConfigBtn = document.getElementById('show-config-btn');
-    const closeModalBtn = document.getElementById('close-modal-btn');
-    const configForm = document.getElementById('config-form');
-    const entitySlotsContainer = document.getElementById('entity-slots-container');
-    const addEntityBtn = document.getElementById('add-entity-btn');
-
-    // ===================================
-    // === RACE & UI MANAGEMENT
-    // ===================================
-
-    function initializeDerby(config) {
-        if (activeEventSource) {
-            activeEventSource.close();
-            activeEventSource = null;
+class MonadVisualizer {
+    constructor() {
+      this.currentTab = "cityscape"
+      this.isConnected = false
+      this.transactionCount = 0
+      this.currentTps = 0
+      this.derbyConfig = {
+        entities: ["Uniswap", "SushiSwap", "PancakeSwap", "Curve", "Balancer"],
+      }
+      this.racerPositions = {}
+      this.racerData = {}
+  
+      this.init()
+    }
+  
+    init() {
+      this.setupEventListeners()
+      this.initializeDerby()
+      this.startCityscapeSimulation()
+      this.startDerbySimulation()
+    }
+  
+    setupEventListeners() {
+      // Tab navigation
+      document.querySelectorAll(".tab-button").forEach((button) => {
+        button.addEventListener("click", (e) => {
+          this.switchTab(e.target.dataset.tab)
+        })
+      })
+  
+      // Derby configuration
+      document.getElementById("configButton").addEventListener("click", () => {
+        this.openConfigModal()
+      })
+  
+      document.getElementById("closeModal").addEventListener("click", () => {
+        this.closeConfigModal()
+      })
+  
+      document.getElementById("applyConfig").addEventListener("click", () => {
+        this.applyConfiguration()
+      })
+  
+      document.getElementById("resetConfig").addEventListener("click", () => {
+        this.resetConfiguration()
+      })
+  
+      // Close modal on overlay click
+      document.getElementById("configModal").addEventListener("click", (e) => {
+        if (e.target.id === "configModal") {
+          this.closeConfigModal()
         }
-
-        currentConfig = config;
-        
-        scoreboardBody.innerHTML = '';
-        racetrack.innerHTML = '';
-        Object.keys(racerState).forEach(key => delete racerState[key]);
-        
-        config.forEach((entity, index) => {
-            const entityId = `entity-${index}`;
-            
-            const row = scoreboardBody.insertRow();
-            row.innerHTML = `
-                <td>${escapeHTML(entity.name)}</td>
-                <td id="tps-${entityId}">0</td>
-                <td id="laps-${entityId}">0</td>
-                <td id="hash-${entityId}">N/A</td>
-            `;
-
-            const lane = document.createElement('div');
-            lane.className = 'lane';
-            lane.innerHTML = `
-                <div class="racer" id="racer-${entityId}"></div>
-                <span class="lane-label">${escapeHTML(entity.name)}</span>
-            `;
-            racetrack.appendChild(lane);
-
-            racerState[entityId] = { position: START_LINE_PERCENT, laps: 0 };
-        });
-
-        connectToServer(config);
+      })
     }
-
-    function connectToServer(config) {
-        const queryParams = `?config=${encodeURIComponent(JSON.stringify(config))}`;
-        const eventSourceUrl = `/derby-data${queryParams}`;
-
-        console.log(`Connecting to: ${eventSourceUrl}`);
-        activeEventSource = new EventSource(eventSourceUrl);
-
-        activeEventSource.onmessage = (event) => {
-            try {
-                const data = JSON.parse(event.data);
-                updateRacers(data);
-            } catch (e) {
-                console.error("Failed to parse server data:", e);
-            }
-        };
-
-        activeEventSource.onerror = (err) => {
-            console.error('EventSource failed:', err);
-            activeEventSource.close();
-        };
+  
+    switchTab(tabName) {
+      // Update active tab button
+      document.querySelectorAll(".tab-button").forEach((btn) => {
+        btn.classList.remove("active")
+      })
+      document.querySelector(`[data-tab="${tabName}"]`).classList.add("active")
+  
+      // Update active page
+      document.querySelectorAll(".page").forEach((page) => {
+        page.classList.remove("active")
+      })
+      document.getElementById(tabName).classList.add("active")
+  
+      this.currentTab = tabName
     }
-
-    function updateRacers(data) {
-        currentConfig.forEach((_, index) => {
-            const entityId = `entity-${index}`;
-            const entityData = data[entityId];
-            if (!entityData) return;
-            
-            const state = racerState[entityId];
-            if (!state) return;
-
-            const tps = entityData.tps || 0;
-            const hash = entityData.hash || 'N/A';
-
-            const racerElement = document.getElementById(`racer-${entityId}`);
-            if (!racerElement) return;
-
-            racerElement.style.animationPlayState = tps > 0 ? 'running' : 'paused';
-            
-            const movement = tps * SPEED_FACTOR;
-            state.position += movement;
-
-            if (state.position >= FINISH_LINE_PERCENT) {
-                state.laps++;
-                const overshoot = state.position - FINISH_LINE_PERCENT;
-                state.position = START_LINE_PERCENT + overshoot;
-            }
-
-            racerElement.style.left = `${state.position}%`;
-            
-            document.getElementById(`tps-${entityId}`).textContent = tps;
-            document.getElementById(`laps-${entityId}`).textContent = state.laps;
-            document.getElementById(`hash-${entityId}`).textContent = hash;
-        });
+  
+    // Cityscape Firehose Implementation
+    startCityscapeSimulation() {
+      this.simulateTransactionStream()
+      this.spawnMonanimal()
+      this.updateStats()
     }
-
-    // ===================================
-    // === MODAL & FORM MANAGEMENT
-    // ===================================
-
-    function populateModalForm(config) {
-        entitySlotsContainer.innerHTML = '';
-        config.forEach((entity, index) => {
-            addEntitySlot(entity.name, entity.addresses, entity.criteria, index);
-        });
-        checkEntityLimit();
+  
+    simulateTransactionStream() {
+      const starsContainer = document.getElementById("starsContainer")
+  
+      const createStar = () => {
+        const star = document.createElement("div")
+        star.className = "star"
+  
+        // Random position
+        star.style.left = Math.random() * 100 + "%"
+        star.style.top = Math.random() * 100 + "%"
+  
+        // Random color variation
+        const colors = ["#836EF9", "#FBFAF9", "#FFFFFF"]
+        star.style.background = colors[Math.floor(Math.random() * colors.length)]
+  
+        starsContainer.appendChild(star)
+  
+        // Remove after animation
+        setTimeout(() => {
+          if (star.parentNode) {
+            star.parentNode.removeChild(star)
+          }
+        }, 1000)
+  
+        this.transactionCount++
+      }
+  
+      // Variable rate transaction simulation
+      const scheduleNextStar = () => {
+        const delay = Math.random() * 200 + 50 // 50-250ms
+        setTimeout(() => {
+          createStar()
+          scheduleNextStar()
+        }, delay)
+      }
+  
+      scheduleNextStar()
     }
-
-    function addEntitySlot(name = '', addresses = '', criteria = 'to', index = null) {
-        if (index === null) {
-            index = entitySlotsContainer.children.length;
+  
+    spawnMonanimal() {
+      const container = document.getElementById("monanimalsContainer")
+  
+      const createMonanimal = () => {
+        const monanimal = document.createElement("div")
+        monanimal.className = "monanimal"
+  
+        // Random vertical position
+        monanimal.style.top = Math.random() * 80 + 10 + "%"
+        monanimal.style.left = "-50px"
+  
+        container.appendChild(monanimal)
+  
+        // Remove after animation
+        setTimeout(() => {
+          if (monanimal.parentNode) {
+            monanimal.parentNode.removeChild(monanimal)
+          }
+        }, 15000)
+      }
+  
+      // Spawn Monanimal every 8-15 seconds
+      const scheduleNextMonanimal = () => {
+        const delay = Math.random() * 7000 + 8000
+        setTimeout(() => {
+          createMonanimal()
+          scheduleNextMonanimal()
+        }, delay)
+      }
+  
+      scheduleNextMonanimal()
+    }
+  
+    updateStats() {
+      const updateTps = () => {
+        // Simulate TPS fluctuation
+        this.currentTps = Math.floor(Math.random() * 5000 + 1000)
+        document.getElementById("liveTps").textContent = this.currentTps.toLocaleString()
+        document.getElementById("totalTx").textContent = this.transactionCount.toLocaleString()
+      }
+  
+      updateTps()
+      setInterval(updateTps, 1000)
+    }
+  
+    // Derby Implementation
+    initializeDerby() {
+      this.createEntityCheckboxes()
+      this.setupRacetrack()
+      this.updateScoreboard()
+    }
+  
+    createEntityCheckboxes() {
+      const container = document.getElementById("entityCheckboxes")
+      const availableEntities = [
+        "Uniswap",
+        "SushiSwap",
+        "PancakeSwap",
+        "Curve",
+        "Balancer",
+        "Compound",
+        "Aave",
+        "MakerDAO",
+        "1inch",
+        "Kyber",
+      ]
+  
+      container.innerHTML = ""
+  
+      availableEntities.forEach((entity) => {
+        const item = document.createElement("div")
+        item.className = "checkbox-item"
+  
+        const checkbox = document.createElement("input")
+        checkbox.type = "checkbox"
+        checkbox.id = `entity-${entity}`
+        checkbox.value = entity
+        checkbox.checked = this.derbyConfig.entities.includes(entity)
+  
+        const label = document.createElement("label")
+        label.htmlFor = `entity-${entity}`
+        label.textContent = entity
+  
+        item.appendChild(checkbox)
+        item.appendChild(label)
+        container.appendChild(item)
+      })
+    }
+  
+    setupRacetrack() {
+      const racetrack = document.getElementById("racetrack")
+      racetrack.innerHTML = ""
+  
+      this.derbyConfig.entities.forEach((entity, index) => {
+        const lane = document.createElement("div")
+        lane.className = "race-lane"
+        lane.innerHTML = `
+                  <div class="lane-background"></div>
+                  <div class="lane-label">${entity}</div>
+                  <div class="racer" id="racer-${entity}"></div>
+              `
+        racetrack.appendChild(lane)
+  
+        // Initialize racer position and data
+        this.racerPositions[entity] = 0
+        this.racerData[entity] = {
+          tps: Math.floor(Math.random() * 1000 + 100),
+          laps: 0,
+          hash: this.generateRandomHash(),
         }
-        
-        const slot = document.createElement('div');
-        slot.className = 'entity-slot';
-        slot.innerHTML = `
-            <button type="button" class="remove-entity-btn" title="Remove this entity">X</button>
-            <div class="slot-header">
-                <label for="entity-name-${index}">Entity Name</label>
-                <input type="text" id="entity-name-${index}" class="entity-name" placeholder="e.g., My Awesome DEX" value="${escapeHTML(name)}">
-            </div>
-            <div class="slot-body">
-                <label for="entity-addresses-${index}">Addresses / Contracts (comma separated)</label>
-                <textarea id="entity-addresses-${index}" class="entity-addresses" rows="3" placeholder="0x...">${escapeHTML(addresses)}</textarea>
-            </div>
-            <div class="slot-criteria">
-                <label>Criteria:</label>
-                <div class="radio-group">
-                    <input type="radio" id="criteria-to-${index}" name="criteria-${index}" value="to" ${criteria === 'to' ? 'checked' : ''}>
-                    <label for="criteria-to-${index}">To Address</label>
-                    <input type="radio" id="criteria-from-${index}" name="criteria-${index}" value="from" ${criteria === 'from' ? 'checked' : ''}>
-                    <label for="criteria-from-${index}">From Address</label>
-                    <input type="radio" id="criteria-both-${index}" name="criteria-${index}" value="both" ${criteria === 'both' ? 'checked' : ''}>
-                    <label for="criteria-both-${index}">Both</label>
-                    <input type="radio" id="criteria-deployer-${index}" name="criteria-${index}" value="deployer" ${criteria === 'deployer' ? 'checked' : ''}>
-                    <label for="criteria-deployer-${index}">Deployed By</label>
-                </div>
-            </div>
-        `;
-        entitySlotsContainer.appendChild(slot);
-        
-        slot.querySelector('.remove-entity-btn').addEventListener('click', () => {
-            slot.remove();
-            checkEntityLimit();
-        });
-        checkEntityLimit();
+      })
     }
-    
-    function checkEntityLimit() {
-        addEntityBtn.disabled = entitySlotsContainer.children.length >= 8;
+  
+    updateScoreboard() {
+      const content = document.getElementById("scoreboardContent")
+      content.innerHTML = ""
+  
+      // Sort entities by TPS for leaderboard
+      const sortedEntities = [...this.derbyConfig.entities].sort((a, b) => this.racerData[b].tps - this.racerData[a].tps)
+  
+      sortedEntities.forEach((entity, index) => {
+        const data = this.racerData[entity]
+        const card = document.createElement("div")
+        card.className = "racer-card"
+        card.innerHTML = `
+                  <div class="racer-name">#${index + 1} ${entity}</div>
+                  <div class="racer-stats">
+                      <span>TPS: ${data.tps}</span>
+                      <span>Laps: ${data.laps}</span>
+                  </div>
+                  <div style="font-size: 0.7rem; opacity: 0.6; margin-top: 0.5rem;">
+                      ${data.hash}
+                  </div>
+              `
+        content.appendChild(card)
+      })
     }
-
-    function escapeHTML(str) {
-        const p = document.createElement("p");
-        p.appendChild(document.createTextNode(str));
-        return p.innerHTML;
+  
+    startDerbySimulation() {
+      const updateRace = () => {
+        this.derbyConfig.entities.forEach((entity) => {
+          // Update TPS with some variation
+          const variation = (Math.random() - 0.5) * 200
+          this.racerData[entity].tps = Math.max(50, Math.floor(this.racerData[entity].tps + variation))
+  
+          // Update position based on TPS
+          const speed = this.racerData[entity].tps / 10000 // Normalize speed
+          this.racerPositions[entity] += speed
+  
+          // Check for lap completion
+          if (this.racerPositions[entity] >= 1) {
+            this.racerPositions[entity] = 0
+            this.racerData[entity].laps++
+            this.racerData[entity].hash = this.generateRandomHash()
+          }
+  
+          // Update racer visual position
+          const racerElement = document.getElementById(`racer-${entity}`)
+          if (racerElement) {
+            const trackWidth = racerElement.parentElement.offsetWidth - 40
+            const position = this.racerPositions[entity] * trackWidth
+            racerElement.style.left = position + "px"
+          }
+        })
+  
+        this.updateScoreboard()
+      }
+  
+      // Update race every 100ms for smooth animation
+      setInterval(updateRace, 100)
     }
-
-    // --- Event Listeners ---
-    showConfigBtn.addEventListener('click', () => {
-        populateModalForm(currentConfig);
-        configOverlay.classList.remove('hidden');
-    });
-
-    closeModalBtn.addEventListener('click', () => {
-        configOverlay.classList.add('hidden');
-    });
-
-    addEntityBtn.addEventListener('click', () => {
-        if (entitySlotsContainer.children.length < 8) {
-            addEntitySlot();
-        }
-    });
-
-    configForm.addEventListener('submit', (e) => {
-        e.preventDefault();
-        const newConfig = [];
-        const slots = entitySlotsContainer.querySelectorAll('.entity-slot');
-        slots.forEach((slot, index) => {
-            const name = slot.querySelector('.entity-name').value.trim();
-            const addresses = slot.querySelector('.entity-addresses').value.trim();
-            const criteria = slot.querySelector(`input[name="criteria-${index}"]:checked`).value;
-            
-            if (name && addresses) {
-                newConfig.push({ name, addresses, criteria });
-            }
-        });
-
-        if (newConfig.length > 0) {
-            initializeDerby(newConfig);
-        }
-        configOverlay.classList.add('hidden');
-    });
-
-    // --- INITIALIZATION ---
-    initializeDerby(DEFAULT_DEX_CONFIG);
-});
+  
+    generateRandomHash() {
+      return "0x" + Array.from({ length: 8 }, () => Math.floor(Math.random() * 16).toString(16)).join("")
+    }
+  
+    // Modal Management
+    openConfigModal() {
+      document.getElementById("configModal").classList.add("active")
+    }
+  
+    closeConfigModal() {
+      document.getElementById("configModal").classList.remove("active")
+    }
+  
+    applyConfiguration() {
+      const checkboxes = document.querySelectorAll('#entityCheckboxes input[type="checkbox"]')
+      const selectedEntities = Array.from(checkboxes)
+        .filter((cb) => cb.checked)
+        .map((cb) => cb.value)
+  
+      if (selectedEntities.length === 0) {
+        alert("Please select at least one entity to race.")
+        return
+      }
+  
+      this.derbyConfig.entities = selectedEntities
+      this.racerPositions = {}
+      this.racerData = {}
+  
+      this.setupRacetrack()
+      this.closeConfigModal()
+    }
+  
+    resetConfiguration() {
+      this.derbyConfig.entities = ["Uniswap", "SushiSwap", "PancakeSwap", "Curve", "Balancer"]
+      this.createEntityCheckboxes()
+      this.setupRacetrack()
+    }
+  }
+  
+  // Initialize the application when DOM is loaded
+  document.addEventListener("DOMContentLoaded", () => {
+    new MonadVisualizer()
+  })
+  
+  // Performance optimization: Use requestAnimationFrame for smooth animations
+  let lastFrameTime = 0
+  function optimizedUpdate(currentTime) {
+    if (currentTime - lastFrameTime >= 16) {
+      // ~60fps
+      // Perform any frame-based updates here
+      lastFrameTime = currentTime
+    }
+    requestAnimationFrame(optimizedUpdate)
+  }
+  requestAnimationFrame(optimizedUpdate)
+  

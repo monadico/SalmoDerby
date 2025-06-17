@@ -3,65 +3,130 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Perpetual Monad Derby</title>
-    <link rel="stylesheet" href="/static/style.css">
+    <title>Monad Super-Visualizer</title>
+    <link rel="stylesheet" href="style.css">
 </head>
 <body>
-
-    <!-- ============================================= -->
-    <!-- ===== CONFIGURATION MODAL (Initially Hidden) ===== -->
-    <!-- ============================================= -->
-    <div id="config-overlay" class="hidden">
-        <div id="config-modal">
-            <h2>Derby Configuration</h2>
-            <p>Define up to 8 entities to race against each other.</p>
-            
-            <form id="config-form">
-                <div id="entity-slots-container">
-                    <!-- JavaScript will dynamically add entity slots here. -->
-                </div>
-
-                <div class="form-actions">
-                    <button type="button" id="add-entity-btn">+ Add Another Entity</button>
-                    <button type="submit" id="update-race-btn">Update Race</button>
-                </div>
-            </form>
-            <button id="close-modal-btn" title="Close">X</button>
-        </div>
+    <!-- Background Elements -->
+    <div class="background-gradient"></div>
+    <div class="background-shapes">
+        <div class="shape shape-1"></div>
+        <div class="shape shape-2"></div>
+        <div class="shape shape-3"></div>
     </div>
 
-
-    <!-- ============================================= -->
-    <!-- ===== MAIN DERBY VISUALIZATION ===== -->
-    <!-- ============================================= -->
-    <div class="derby-container">
-        <header id="scoreboard">
-            <div class="scoreboard-header">
-                <h1>Perpetual Monad Derby</h1>
-                <button id="show-config-btn">⚙️ Configure Race</button>
+    <!-- Main Container -->
+    <div class="app-container">
+        <!-- Header -->
+        <header class="header glass-panel">
+            <div class="logo">
+                <div class="logo-icon">M</div>
+                <h1>Monad Super-Visualizer</h1>
             </div>
-            <p>Live On-Chain Activity on Monad Testnet</p>
-            <table id="scoreboard-table">
-                <thead>
-                    <tr>
-                        <th>Entity Name</th>
-                        <th>Live TPS</th>
-                        <th>Laps Completed</th>
-                        <th>Latest TX Hash</th>
-                    </tr>
-                </thead>
-                <tbody id="scoreboard-body">
-                    <!-- JavaScript will dynamically populate this table -->
-                </tbody>
-            </table>
+            <nav class="nav-tabs">
+                <button class="tab-button active" data-tab="cityscape">
+                    <span class="tab-icon">✨</span>
+                    Cityscape Firehose
+                </button>
+                <button class="tab-button" data-tab="derby">
+                    <span class="tab-icon">🏁</span>
+                    Perpetual Derby
+                </button>
+                <button class="tab-button" data-tab="dashboard">
+                    <span class="tab-icon">📊</span>
+                    Dashboard
+                </button>
+            </nav>
         </header>
 
-        <main id="racetrack">
-            <!-- JavaScript will dynamically populate this with lanes and racers -->
+        <!-- Page Content -->
+        <main class="main-content">
+            <!-- Page 1: Cityscape Firehose -->
+            <div id="cityscape" class="page active">
+                <div class="cityscape-container">
+                    <div class="cityscape-background"></div>
+                    <div class="stars-container" id="starsContainer"></div>
+                    <div class="monanimal-container" id="monanimalsContainer"></div>
+                    <div class="stats-overlay glass-panel">
+                        <div class="stat">
+                            <span class="stat-label">Live TPS</span>
+                            <span class="stat-value" id="liveTps">0</span>
+                        </div>
+                        <div class="stat">
+                            <span class="stat-label">Total Transactions</span>
+                            <span class="stat-value" id="totalTx">0</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Page 2: Perpetual Monad Derby -->
+            <div id="derby" class="page">
+                <div class="derby-container">
+                    <!-- Scoreboard -->
+                    <div class="scoreboard glass-panel">
+                        <div class="scoreboard-header">
+                            <h2>Race Leaderboard</h2>
+                            <button class="config-button" id="configButton">
+                                ⚙️ Configure Race
+                            </button>
+                        </div>
+                        <div class="scoreboard-content" id="scoreboardContent">
+                            <!-- Dynamic content -->
+                        </div>
+                    </div>
+
+                    <!-- Racetrack -->
+                    <div class="racetrack-container">
+                        <div class="racetrack" id="racetrack">
+                            <!-- Dynamic lanes -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Configuration Modal -->
+                <div class="modal-overlay" id="configModal">
+                    <div class="modal glass-panel">
+                        <div class="modal-header">
+                            <h3>Configure Race</h3>
+                            <button class="close-button" id="closeModal">×</button>
+                        </div>
+                        <div class="modal-content">
+                            <div class="config-section">
+                                <label>Select Entities to Race:</label>
+                                <div class="entity-checkboxes" id="entityCheckboxes">
+                                    <!-- Dynamic checkboxes -->
+                                </div>
+                            </div>
+                            <div class="config-actions">
+                                <button class="btn-secondary" id="resetConfig">Reset to Default</button>
+                                <button class="btn-primary" id="applyConfig">Apply Configuration</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Page 3: Dashboard -->
+            <div id="dashboard" class="page">
+                <div class="dashboard-container">
+                    <div class="placeholder-panel glass-panel">
+                        <div class="placeholder-content">
+                            <div class="placeholder-icon">📊</div>
+                            <h2>Historical Data Dashboard</h2>
+                            <p>Coming Soon!</p>
+                            <div class="placeholder-features">
+                                <div class="feature">📈 Advanced Analytics</div>
+                                <div class="feature">🔍 Deep Insights</div>
+                                <div class="feature">📋 Custom Reports</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </main>
     </div>
 
-    <!-- The defer attribute ensures the script runs after the document is parsed -->
-    <script src="/static/script.js" defer></script>
+    <script src="script.js"></script>
 </body>
 </html>

@@ -1,29 +1,26 @@
 class MonadVisualizer {
   constructor() {
     this.currentTab = "cityscape";
-    this.eventSource = null; // To hold the SSE connection
+    this.eventSource = null;
 
-    // --- State managed by backend data ---
+    // --- State & Rendering ---
     this.currentTps = 0;
     this.blockNumber = 0;
     this.totalTxFees = 0;
     this.maxTpsForBar = 8000;
 
-    // --- Smart Queue with Load Shedding ---
-    this.renderQueue = []; // Holds incoming transactions for visualization.
-    this.isProcessingQueue = false; // Flag to ensure only one rendering loop is active.
-    this.MAX_QUEUE_SIZE = 500; // The maximum number of transactions to hold before dropping old ones.
-    this.RENDER_THRESHOLD = 10; // Number of items in queue before we start rendering in batches to catch up.
-    this.MAX_RENDER_DELAY = 20; // The base delay (in ms) between rendering frames for a smooth visual effect.
-    this.MIN_RENDER_DELAY = 1; // The minimum delay when the queue is large, to render as fast as possible.
+    // --- Unified Queue for Visuals & Data Feed ---
+    this.renderQueue = []; 
+    this.isProcessingQueue = false;
+    this.MAX_QUEUE_SIZE = 500; // Max items to hold before dropping old ones
+    this.RENDER_THRESHOLD = 10; 
+    this.MAX_RENDER_DELAY = 20; 
+    this.MIN_RENDER_DELAY = 1;
 
-
-    // --- Derby properties (unchanged for now) ---
+    // --- Derby properties ---
     this.derbyConfig = {
       entities: ["Uniswap", "SushiSwap", "PancakeSwap", "Curve", "Balancer"],
     };
-    this.racerPositions = {};
-    this.racerData = {};
     this.numGridLines = 10;
     
     this.init();
@@ -37,7 +34,6 @@ class MonadVisualizer {
     this.connectToStream();
   }
 
-  // Connects the frontend to the backend SSE stream
   connectToStream() {
     console.log("Connecting to backend firehose stream...");
     
@@ -59,21 +55,14 @@ class MonadVisualizer {
 
             this.updateStatsBar(data);
 
-            // *** SMART QUEUE LOGIC ***
             if (data.transactions && data.transactions.length > 0) {
-                // 1. Check if the queue will overflow
+                // Load shedding logic for the unified queue
                 const overflowCount = (this.renderQueue.length + data.transactions.length) - this.MAX_QUEUE_SIZE;
-
-                // 2. If it will overflow, remove the oldest transactions ("load shedding")
                 if (overflowCount > 0) {
-                    this.renderQueue.splice(0, overflowCount); // Remove oldest items from the front
-                    console.warn(`Queue overloaded. Shedding ${overflowCount} oldest transactions.`);
+                    this.renderQueue.splice(0, overflowCount);
                 }
-
-                // 3. Add the new, most recent transactions to the queue
                 this.renderQueue.push(...data.transactions);
 
-                // 4. Start the rendering loop if it's not already running
                 if (!this.isProcessingQueue) {
                     this.processRenderQueue();
                 }
@@ -86,26 +75,22 @@ class MonadVisualizer {
     this.eventSource.onerror = (err) => {
         console.error("EventSource failed:", err);
         this.eventSource.close();
-        // Implement a backoff strategy for reconnection
         setTimeout(() => this.connectToStream(), 5000); 
     };
   }
 
-  // Processes the render queue with dynamic delay and batching
   processRenderQueue() {
     this.isProcessingQueue = true;
 
-    // Stop if the queue is empty
     if (this.renderQueue.length === 0) {
         this.isProcessingQueue = false;
         return;
     }
 
-    // Dynamic batching: If the queue is long, render a larger chunk to catch up.
     const itemsToRenderCount = this.renderQueue.length > this.RENDER_THRESHOLD ? 3 : 1;
     
     for (let i = 0; i < itemsToRenderCount; i++) {
-        const tx = this.renderQueue.shift(); // Get the oldest transaction from the front
+        const tx = this.renderQueue.shift();
         if (tx) {
             const transaction = {
                 type: this.getTransactionType(tx.value),
@@ -113,33 +98,31 @@ class MonadVisualizer {
                 timestamp: new Date().toISOString(),
                 value: parseFloat(tx.value) || 0
             };
+            // Create a bar and add to the feed for each transaction
             this.createTransactionBar(transaction);
             this.addToDataFeed(transaction);
         }
     }
 
-    // Dynamic delay: The more items in the queue, the smaller the delay, ensuring faster rendering.
     const delay = Math.max(
         this.MIN_RENDER_DELAY, 
         this.MAX_RENDER_DELAY - Math.floor(this.renderQueue.length / 10)
     );
 
-    // Schedule the next frame
     setTimeout(() => {
         this.processRenderQueue();
     }, delay);
   }
 
-  // Updates all the elements in the bottom stats bar
   updateStatsBar(data) {
     if (!data) return;
 
     const tpsValueElement = document.getElementById('liveTpsValue');
     const tpsGaugeInnerElement = document.getElementById('tpsGaugeInner');
     if (tpsValueElement && tpsGaugeInnerElement && data.tps !== undefined) {
-        const displayTps = data.tps.toFixed(1);
-        tpsValueElement.textContent = displayTps;
-        const gaugePercentage = Math.min(100, (data.tps / this.maxTpsForBar) * 100);
+        this.currentTps = data.tps;
+        tpsValueElement.textContent = this.currentTps.toFixed(1);
+        const gaugePercentage = Math.min(100, (this.currentTps / this.maxTpsForBar) * 100);
         tpsGaugeInnerElement.style.width = `${gaugePercentage}%`;
     }
 
@@ -156,7 +139,6 @@ class MonadVisualizer {
     }
   }
 
-  // Helper function to determine transaction size from value
   getTransactionType(value) {
       const monValue = parseFloat(value);
       if (monValue > 1000) return 'supernova';
@@ -165,22 +147,15 @@ class MonadVisualizer {
       return 'small';
   }
 
-  // --- UI Methods ---
-
   addToDataFeed(transaction) {
     const feed = document.getElementById('dataFeed');
     if (!feed) return;
 
-    // *** MODIFIED: Create an anchor (<a>) tag instead of a div ***
     const feedItem = document.createElement('a');
     feedItem.className = 'feed-item';
-    
-    // Set the link to the Monad Explorer for the specific transaction hash
     feedItem.href = `https://testnet.monadexplorer.com/tx/${transaction.hash}`;
-    
-    // Open the link in a new tab for better user experience
     feedItem.target = '_blank';
-    feedItem.rel = 'noopener noreferrer'; // Security best practice for target="_blank"
+    feedItem.rel = 'noopener noreferrer';
 
     const timestamp = new Date(transaction.timestamp).toLocaleTimeString();
     const value = transaction.value.toFixed(2);
@@ -188,22 +163,33 @@ class MonadVisualizer {
     
     feed.insertBefore(feedItem, feed.firstChild);
 
-    // Keep the feed list to a reasonable size
     while (feed.children.length > 30) {
       feed.removeChild(feed.lastChild);
     }
   }
 
+  // MODIFIED: Now sets bar height based on transaction value
   createTransactionBar(transaction) {
     const container = document.querySelector(".transaction-container");
     if (!container) return;
 
     const bar = document.createElement("div");
+    // The 'type' class (small, large) is still useful for color and effects
     bar.classList.add("transaction-bar", transaction.type, "animated");
     if (transaction.type === 'supernova') {
         bar.classList.add('supernova');
     }
 
+    // --- Dynamic Height Calculation ---
+    const minHeight = 2; // px
+    const maxHeight = 80; // px
+    const scaleFactor = 4; // Adjust this to control height sensitivity
+    // Use a logarithmic scale (log1p = ln(1+x)) to handle large value variations gracefully
+    let height = minHeight + Math.log1p(transaction.value) * scaleFactor;
+    height = Math.min(height, maxHeight); // Cap the height
+    bar.style.height = `${height}px`;
+    // --- End Dynamic Height ---
+    
     const columnWidth = container.clientWidth / this.numGridLines;
     const columnIndex = Math.floor(Math.random() * this.numGridLines);
     const x = columnIndex * columnWidth + (columnWidth / 2);
@@ -226,12 +212,9 @@ class MonadVisualizer {
 
     container.appendChild(bar);
 
-    // Garbage collection for the DOM element
     setTimeout(() => {
-      if (bar.parentNode) {
-        bar.remove();
-      }
-    }, 4000); // Animation is 3.5s, give it a little extra time
+      if (bar.parentNode) bar.remove();
+    }, 4000);
   }
 
   setupGridLines() {
@@ -244,8 +227,6 @@ class MonadVisualizer {
         container.appendChild(line);
     }
   }
-
-  // --- Event Listeners and Tab Management ---
 
   setupEventListeners() {
     document.querySelectorAll('.tab-button').forEach(button => {
@@ -282,72 +263,15 @@ class MonadVisualizer {
   }
 
   // --- DERBY METHODS (unchanged) ---
-
-  initializeDerby() {
-    this.updateCurrentEntities();
-    this.setupRacetrack();
-  }
-
-  updateCurrentEntities() {
-    const container = document.getElementById('currentEntities');
-    if (!container) return;
-    container.innerHTML = '';
-    this.derbyConfig.entities.forEach(entity => {
-      const tag = document.createElement('div');
-      tag.className = 'entity-tag';
-      tag.innerHTML = `${entity} <button class="remove-btn" data-entity="${entity}">×</button>`;
-      container.appendChild(tag);
-    });
-    container.querySelectorAll('.remove-btn').forEach(btn => {
-      btn.addEventListener('click', () => this.removeEntity(btn.dataset.entity));
-    });
-  }
-  removeEntity(entityName) {
-    this.derbyConfig.entities = this.derbyConfig.entities.filter(e => e !== entityName);
-    this.updateCurrentEntities();
-  }
-  addEntity() {
-    const nameInput = document.getElementById('entityName');
-    const addressesInput = document.getElementById('entityAddresses');
-    if (!nameInput || !addressesInput) return;
-    const name = nameInput.value.trim();
-    const addresses = addressesInput.value.trim();
-    if (name && addresses) {
-      if (!this.derbyConfig.entities.includes(name)) {
-        this.derbyConfig.entities.push(name);
-        this.updateCurrentEntities();
-      }
-      nameInput.value = '';
-      addressesInput.value = '';
-    }
-  }
-  setupRacetrack() {
-    const track = document.getElementById('racetrack');
-    if (!track) return;
-    track.innerHTML = '';
-    this.derbyConfig.entities.forEach((entity) => {
-      const lane = document.createElement('div');
-      lane.className = 'race-lane';
-      lane.innerHTML = `<div class="lane-background"></div><div class="racer" data-entity="${entity}"></div><div class="lane-label">${entity}</div>`;
-      track.appendChild(lane);
-    });
-  }
-  openConfigModal() {
-    const modal = document.getElementById('configModal');
-    if (modal) modal.classList.add('active');
-  }
-  closeConfigModal() {
-    const modal = document.getElementById('configModal');
-    if (modal) modal.classList.remove('active');
-  }
-  applyConfiguration() {
-    this.setupRacetrack();
-    this.closeConfigModal();
-  }
-  resetConfiguration() {
-    this.derbyConfig.entities = ["Uniswap", "SushiSwap", "PancakeSwap", "Curve", "Balancer"];
-    this.updateCurrentEntities();
-  }
+  initializeDerby(){ this.updateCurrentEntities(); this.setupRacetrack(); }
+  updateCurrentEntities(){ const container = document.getElementById('currentEntities'); if (!container) return; container.innerHTML = ''; this.derbyConfig.entities.forEach(entity => { const tag = document.createElement('div'); tag.className = 'entity-tag'; tag.innerHTML = `${entity} <button class="remove-btn" data-entity="${entity}">×</button>`; container.appendChild(tag); }); container.querySelectorAll('.remove-btn').forEach(btn => { btn.addEventListener('click', () => this.removeEntity(btn.dataset.entity)); }); }
+  removeEntity(entityName){ this.derbyConfig.entities = this.derbyConfig.entities.filter(e => e !== entityName); this.updateCurrentEntities(); }
+  addEntity(){ const nameInput = document.getElementById('entityName'); const addressesInput = document.getElementById('entityAddresses'); if (!nameInput || !addressesInput) return; const name = nameInput.value.trim(); const addresses = addressesInput.value.trim(); if (name && addresses) { if (!this.derbyConfig.entities.includes(name)) { this.derbyConfig.entities.push(name); this.updateCurrentEntities(); } nameInput.value = ''; addressesInput.value = ''; } }
+  setupRacetrack(){ const track = document.getElementById('racetrack'); if (!track) return; track.innerHTML = ''; this.derbyConfig.entities.forEach((entity) => { const lane = document.createElement('div'); lane.className = 'race-lane'; lane.innerHTML = `<div class="lane-background"></div><div class="racer" data-entity="${entity}"></div><div class="lane-label">${entity}</div>`; track.appendChild(lane); }); }
+  openConfigModal(){ const modal = document.getElementById('configModal'); if (modal) modal.classList.add('active'); }
+  closeConfigModal(){ const modal = document.getElementById('configModal'); if (modal) modal.classList.remove('active'); }
+  applyConfiguration(){ this.setupRacetrack(); this.closeConfigModal(); }
+  resetConfiguration(){ this.derbyConfig.entities = ["Uniswap", "SushiSwap", "PancakeSwap", "Curve", "Balancer"]; this.updateCurrentEntities(); }
 }
 
 document.addEventListener("DOMContentLoaded", () => {

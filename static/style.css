@@ -208,26 +208,27 @@ body {
 }
 
 /* --- ENHANCED TRANSACTION BAR EFFECTS --- */
+/* ... other styles remain the same ... */
+
+/* --- ENHANCED TRANSACTION BAR EFFECTS --- */
 .transaction-bar {
   position: absolute;
-  height: 2px;
+  /* height: 2px; REMOVED - Height is now set dynamically by JS */
   opacity: 0;
   z-index: 5;
   border-radius: 1px;
   transform: translateX(-50%);
 }
 
-.transaction-bar.small { height: 2px; }
-.transaction-bar.medium { height: 2.5px; }
-.transaction-bar.large { height: 3px; }
-.transaction-bar.supernova { height: 4px; }
-
+/* Transaction size classes are now handled through the animation system */
 @keyframes enhancedGlow {
   0% { box-shadow: 0 0 8px currentColor; filter: brightness(1.2); }
   40% { box-shadow: 0 0 25px currentColor, 0 0 40px currentColor, 0 0 60px rgba(255, 255, 255, 0.5); filter: brightness(2.5); }
   60% { box-shadow: 0 0 15px currentColor, 0 0 25px currentColor; filter: brightness(1.8); }
   100% { box-shadow: 0 0 8px currentColor; filter: brightness(1.2); }
 }
+
+/* ... rest of the file is unchanged ... */
 
 @keyframes supernovaGlow {
   0% { box-shadow: 0 0 10px currentColor; filter: brightness(1.5); }

@@ -9,11 +9,14 @@ class MonadVisualizer {
     this.totalTxFees = 0;
     this.maxTpsForBar = 8000;
 
-    // --- NEW: For smooth rendering ---
-    this.renderQueue = [];
-    this.isProcessingQueue = false;
-    this.RENDER_THRESHOLD = 5; // Max items before we speed up rendering
-    this.MAX_RENDER_DELAY = 15; // Max delay in ms for smooth rendering
+    // --- Smart Queue with Load Shedding ---
+    this.renderQueue = []; // Holds incoming transactions for visualization.
+    this.isProcessingQueue = false; // Flag to ensure only one rendering loop is active.
+    this.MAX_QUEUE_SIZE = 500; // The maximum number of transactions to hold before dropping old ones.
+    this.RENDER_THRESHOLD = 10; // Number of items in queue before we start rendering in batches to catch up.
+    this.MAX_RENDER_DELAY = 20; // The base delay (in ms) between rendering frames for a smooth visual effect.
+    this.MIN_RENDER_DELAY = 1; // The minimum delay when the queue is large, to render as fast as possible.
+
 
     // --- Derby properties (unchanged for now) ---
     this.derbyConfig = {
@@ -46,55 +49,82 @@ class MonadVisualizer {
     this.eventSource = new EventSource(streamUrl);
 
     this.eventSource.onmessage = (event) => {
-        const data = JSON.parse(event.data);
-        this.updateStatsBar(data);
+        try {
+            const data = JSON.parse(event.data);
 
-        // NEW: Instead of rendering immediately, add transactions to a queue
-        if (data.transactions && data.transactions.length > 0) {
-            this.renderQueue.push(...data.transactions);
-            // Start the rendering loop if it's not already running
-            if (!this.isProcessingQueue) {
-                this.processRenderQueue();
+            if(data.error) {
+                console.error("Received error from backend:", data.error);
+                return;
             }
+
+            this.updateStatsBar(data);
+
+            // *** SMART QUEUE LOGIC ***
+            if (data.transactions && data.transactions.length > 0) {
+                // 1. Check if the queue will overflow
+                const overflowCount = (this.renderQueue.length + data.transactions.length) - this.MAX_QUEUE_SIZE;
+
+                // 2. If it will overflow, remove the oldest transactions ("load shedding")
+                if (overflowCount > 0) {
+                    this.renderQueue.splice(0, overflowCount); // Remove oldest items from the front
+                    console.warn(`Queue overloaded. Shedding ${overflowCount} oldest transactions.`);
+                }
+
+                // 3. Add the new, most recent transactions to the queue
+                this.renderQueue.push(...data.transactions);
+
+                // 4. Start the rendering loop if it's not already running
+                if (!this.isProcessingQueue) {
+                    this.processRenderQueue();
+                }
+            }
+        } catch (e) {
+            console.error("Error parsing SSE data:", e);
         }
     };
 
     this.eventSource.onerror = (err) => {
         console.error("EventSource failed:", err);
         this.eventSource.close();
+        // Implement a backoff strategy for reconnection
         setTimeout(() => this.connectToStream(), 5000); 
     };
   }
 
-  // NEW: Processes the render queue with dynamic delay
+  // Processes the render queue with dynamic delay and batching
   processRenderQueue() {
     this.isProcessingQueue = true;
 
+    // Stop if the queue is empty
     if (this.renderQueue.length === 0) {
         this.isProcessingQueue = false;
         return;
     }
 
-    // If the queue is too long, render a chunk at once to catch up
+    // Dynamic batching: If the queue is long, render a larger chunk to catch up.
     const itemsToRenderCount = this.renderQueue.length > this.RENDER_THRESHOLD ? 3 : 1;
     
     for (let i = 0; i < itemsToRenderCount; i++) {
-        const tx = this.renderQueue.shift();
+        const tx = this.renderQueue.shift(); // Get the oldest transaction from the front
         if (tx) {
             const transaction = {
                 type: this.getTransactionType(tx.value),
                 hash: tx.hash,
                 timestamp: new Date().toISOString(),
-                value: parseFloat(tx.value)
+                value: parseFloat(tx.value) || 0
             };
             this.createTransactionBar(transaction);
             this.addToDataFeed(transaction);
         }
     }
 
-    // Calculate dynamic delay: more items = less delay
-    const delay = Math.max(0, this.MAX_RENDER_DELAY - (this.renderQueue.length * 2));
+    // Dynamic delay: The more items in the queue, the smaller the delay, ensuring faster rendering.
+    const delay = Math.max(
+        this.MIN_RENDER_DELAY, 
+        this.MAX_RENDER_DELAY - Math.floor(this.renderQueue.length / 10)
+    );
 
+    // Schedule the next frame
     setTimeout(() => {
         this.processRenderQueue();
     }, delay);
@@ -102,9 +132,11 @@ class MonadVisualizer {
 
   // Updates all the elements in the bottom stats bar
   updateStatsBar(data) {
+    if (!data) return;
+
     const tpsValueElement = document.getElementById('liveTpsValue');
     const tpsGaugeInnerElement = document.getElementById('tpsGaugeInner');
-    if (tpsValueElement && tpsGaugeInnerElement) {
+    if (tpsValueElement && tpsGaugeInnerElement && data.tps !== undefined) {
         const displayTps = data.tps.toFixed(1);
         tpsValueElement.textContent = displayTps;
         const gaugePercentage = Math.min(100, (data.tps / this.maxTpsForBar) * 100);
@@ -112,13 +144,13 @@ class MonadVisualizer {
     }
 
     const blockElement = document.getElementById('blockNumberValue');
-    if (blockElement) {
+    if (blockElement && data.latest_block && data.latest_block.number) {
         this.blockNumber = data.latest_block.number;
         blockElement.textContent = this.blockNumber.toLocaleString();
     }
 
     const feesElement = document.getElementById('txFeesValue');
-    if (feesElement) {
+    if (feesElement && data.total_fees_in_batch !== undefined) {
         this.totalTxFees += data.total_fees_in_batch;
         feesElement.textContent = this.totalTxFees.toFixed(4);
     }
@@ -133,49 +165,32 @@ class MonadVisualizer {
       return 'small';
   }
 
-  // --- UI and unchanged methods below ---
+  // --- UI Methods ---
 
-  setupGridLines() {
-    const container = document.querySelector('.grid-lines');
-    if (!container) return;
-    container.innerHTML = '';
-    for (let i = 0; i < this.numGridLines; i++) {
-        const line = document.createElement('div');
-        line.className = 'grid-line';
-        container.appendChild(line);
-    }
-  }
+  addToDataFeed(transaction) {
+    const feed = document.getElementById('dataFeed');
+    if (!feed) return;
 
-  setupEventListeners() {
-    document.querySelectorAll('.tab-button').forEach(button => {
-      button.addEventListener('click', () => {
-        this.switchTab(button.dataset.tab);
-      });
-    });
-
-    document.getElementById('configButton')?.addEventListener('click', () => this.openConfigModal());
-    document.getElementById('closeModal')?.addEventListener('click', () => this.closeConfigModal());
-    document.getElementById('addEntity')?.addEventListener('click', () => this.addEntity());
-    document.getElementById('applyConfig')?.addEventListener('click', () => this.applyConfiguration());
-    document.getElementById('resetConfig')?.addEventListener('click', () => this.resetConfiguration());
-  }
-
-  switchTab(tabName) {
-    this.currentTab = tabName;
-    document.querySelectorAll('.tab-button').forEach(button => {
-      button.classList.toggle('active', button.dataset.tab === tabName);
-    });
-    document.querySelectorAll('.page').forEach(page => {
-      page.classList.toggle('active', page.id === tabName);
-    });
+    // *** MODIFIED: Create an anchor (<a>) tag instead of a div ***
+    const feedItem = document.createElement('a');
+    feedItem.className = 'feed-item';
     
-    if (tabName === 'cityscape') {
-      this.connectToStream();
-    } else {
-      if (this.eventSource) {
-        this.eventSource.close();
-        this.eventSource = null;
-      }
+    // Set the link to the Monad Explorer for the specific transaction hash
+    feedItem.href = `https://testnet.monadexplorer.com/tx/${transaction.hash}`;
+    
+    // Open the link in a new tab for better user experience
+    feedItem.target = '_blank';
+    feedItem.rel = 'noopener noreferrer'; // Security best practice for target="_blank"
+
+    const timestamp = new Date(transaction.timestamp).toLocaleTimeString();
+    const value = transaction.value.toFixed(2);
+    feedItem.innerHTML = `<span class="timestamp">${timestamp}</span><span class="action">${transaction.type.toUpperCase()}</span><span class="details">${value} ETH</span>`;
+    
+    feed.insertBefore(feedItem, feed.firstChild);
+
+    // Keep the feed list to a reasonable size
+    while (feed.children.length > 30) {
+      feed.removeChild(feed.lastChild);
     }
   }
 
@@ -211,33 +226,68 @@ class MonadVisualizer {
 
     container.appendChild(bar);
 
+    // Garbage collection for the DOM element
     setTimeout(() => {
       if (bar.parentNode) {
         bar.remove();
       }
-    }, 3600);
+    }, 4000); // Animation is 3.5s, give it a little extra time
   }
 
-  addToDataFeed(transaction) {
-    const feed = document.getElementById('dataFeed');
-    if (!feed) return;
-    const feedItem = document.createElement('div');
-    feedItem.className = 'feed-item';
-    const timestamp = new Date(transaction.timestamp).toLocaleTimeString();
-    const value = transaction.value.toFixed(2);
-    feedItem.innerHTML = `<span class="timestamp">${timestamp}</span><span class="action">${transaction.type.toUpperCase()}</span><span class="details">${value} ETH</span>`;
-    feed.insertBefore(feedItem, feed.firstChild);
-    while (feed.children.length > 20) {
-      feed.removeChild(feed.lastChild);
+  setupGridLines() {
+    const container = document.querySelector('.grid-lines');
+    if (!container) return;
+    container.innerHTML = '';
+    for (let i = 0; i < this.numGridLines; i++) {
+        const line = document.createElement('div');
+        line.className = 'grid-line';
+        container.appendChild(line);
     }
   }
+
+  // --- Event Listeners and Tab Management ---
+
+  setupEventListeners() {
+    document.querySelectorAll('.tab-button').forEach(button => {
+      button.addEventListener('click', () => {
+        this.switchTab(button.dataset.tab);
+      });
+    });
+
+    document.getElementById('configButton')?.addEventListener('click', () => this.openConfigModal());
+    document.getElementById('closeModal')?.addEventListener('click', () => this.closeConfigModal());
+    document.getElementById('addEntity')?.addEventListener('click', () => this.addEntity());
+    document.getElementById('applyConfig')?.addEventListener('click', () => this.applyConfiguration());
+    document.getElementById('resetConfig')?.addEventListener('click', () => this.resetConfiguration());
+  }
+
+  switchTab(tabName) {
+    this.currentTab = tabName;
+    document.querySelectorAll('.tab-button').forEach(button => {
+      button.classList.toggle('active', button.dataset.tab === tabName);
+    });
+    document.querySelectorAll('.page').forEach(page => {
+      page.classList.toggle('active', page.id === tabName);
+    });
+    
+    if (tabName === 'cityscape') {
+      this.connectToStream();
+    } else {
+      if (this.eventSource) {
+        this.eventSource.close();
+        this.eventSource = null;
+        console.log("Closed firehose stream.");
+      }
+    }
+  }
+
+  // --- DERBY METHODS (unchanged) ---
 
   initializeDerby() {
     this.updateCurrentEntities();
     this.setupRacetrack();
   }
 
-  // --- DERBY METHODS (unchanged) ---
   updateCurrentEntities() {
     const container = document.getElementById('currentEntities');
     if (!container) return;

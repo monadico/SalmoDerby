@@ -54,7 +54,7 @@ class MonadVisualizer {
     console.log("Connecting to Cityscape firehose stream...");
     this.closeStreams(); // Ensure no other streams are active
 
-    const streamUrl = 'http://localhost:8000/firehose-stream';
+    const streamUrl = `${window.CONFIG.API_BASE_URL}/firehose-stream`;
     this.eventSource = new EventSource(streamUrl);
 
     this.eventSource.onmessage = (event) => {
@@ -77,7 +77,7 @@ class MonadVisualizer {
     console.log("Connecting to Perpetual Derby stream...");
     this.closeStreams(); // Ensure no other streams are active
 
-    const streamUrl = 'http://localhost:8000/derby-stream';
+    const streamUrl = `${window.CONFIG.API_BASE_URL}/derby-stream`;
     this.derbyEventSource = new EventSource(streamUrl);
 
     this.derbyEventSource.onmessage = (event) => {
@@ -550,7 +550,7 @@ class MonadVisualizer {
     }));
 
     try {
-        const response = await fetch('http://localhost:8000/update-derby-config', {
+        const response = await fetch(`${window.CONFIG.API_BASE_URL}/update-derby-config`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ entities: entitiesPayload })

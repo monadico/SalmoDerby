@@ -1,0 +1,19 @@
+{
+  "builds": [
+    {
+      "src": "static/**",
+      "use": "@vercel/static"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "/static/$1"
+    }
+  ],
+  "functions": {
+    "static/index.html": {
+      "includeFiles": "static/**"
+    }
+  }
+} 

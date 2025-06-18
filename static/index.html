@@ -1,25 +1,171 @@
 <!DOCTYPE html>
 <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Monad Live Transaction Visualizer (WebGL)</title>
-        <link rel="stylesheet" href="/static/style.css">
-    </head>
-    <body>
-        <video autoplay loop muted playsinline id="background-video">
-            <source src="/static/Generate_a_seamless_202505231121.mp4" type="video/mp4">
-            Your browser does not support the video tag.
-        </video>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Monad Super-Visualizer</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="background-gradient"></div>
+    <div class="background-shapes">
+        <div class="shape shape-1"></div>
+        <div class="shape shape-2"></div>
+        <div class="shape shape-3"></div>
+    </div>
 
-        <div id="tps-counter">TPS: 0.0</div>
-        
-        <div id="performance-counter">Stars: 0 | FPS: 0</div>
-        
-        <div id="star-canvas-container">
-            <canvas id="starCanvas"></canvas>
-        </div>
+    <div class="app-container">
+        <header class="header glass-panel">
+            <div class="logo">
+                <div class="logo-icon">M</div>
+                <h1>Monad Super-Visualizer</h1>
+            </div>
+            <nav class="nav-tabs">
+                <button class="tab-button active" data-tab="cityscape">
+                    <span class="tab-icon">✨</span>
+                    <span>Data Stream</span>
+                </button>
+                <button class="tab-button" data-tab="derby">
+                    <span class="tab-icon">🏁</span>
+                    <span>Perpetual Derby</span>
+                </button>
+                <button class="tab-button" data-tab="dashboard">
+                    <span class="tab-icon">📊</span>
+                    <span>Dashboard</span>
+                </button>
+            </nav>
+        </header>
 
-        <script src="/static/script.js"></script>
-    </body>
+        <main class="main-content">
+            <div id="cityscape" class="page active">
+                <div class="main-layout">
+                    <div class="visualization-area">
+                        <div class="data-stream-container">
+                            <div class="transaction-container">
+                                <div class="grid-lines"></div>
+                                <div class="overlay"></div>
+                            </div>
+                        </div>
+                    </div>
+                    <aside class="data-stream-sidebar">
+                        <div class="data-feed glass-panel">
+                            <div class="feed-header">
+                                <span>Data Stream</span>
+                                <span class="live-indicator">LIVE</span>
+                            </div>
+                            <div class="feed-content" id="dataFeed"></div>
+                        </div>
+                    </aside>
+                    <div class="live-stats-bar">
+                        <div class="stat-block tps-block">
+                            <div class="stat-label">Live TPS</div>
+                            <div class="stat-value" id="liveTpsValue">0</div>
+                            <div class="tps-gauge">
+                                <div class="tps-gauge-inner" id="tpsGaugeInner"></div>
+                            </div>
+                        </div>
+                        <div class="stat-separator"></div>
+                        <div class="stat-block">
+                            <div class="stat-label">Current Block</div>
+                            <div class="stat-value" id="blockNumberValue">0</div>
+                        </div>
+                        <div class="stat-separator"></div>
+                        <div class="stat-block">
+                            <div class="stat-label">Tx Fees Spent (MON)</div>
+                            <div class="stat-value" id="txFeesValue">0.0000</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="derby" class="page">
+                <div class="derby-container">
+                    <div class="scoreboard glass-panel">
+                        <div class="scoreboard-header">
+                            <h2>Race Leaderboard</h2>
+                            <button class="config-button" id="configButton">⚙️ Configure Race</button>
+                        </div>
+                        <div class="scoreboard-content" id="scoreboardContent"></div>
+                    </div>
+
+                    <div class="racetrack-container glass-panel">
+                        <div class="racetrack" id="racetrack"></div>
+                    </div>
+                </div>
+
+                <div class="modal-overlay" id="configModal">
+                    <div class="modal glass-panel">
+                        <div class="modal-header">
+                            <h3>Configure Race</h3>
+                            <button class="close-button" id="closeModal">×</button>
+                        </div>
+                        <div class="modal-content">
+                            <div class="config-section">
+                                <label>Entity Configuration:</label>
+                                <div class="input-row">
+                                    <div class="input-group">
+                                        <label for="entityName">Entity Name</label>
+                                        <input type="text" id="entityName" placeholder="e.g., Uniswap V3" class="glass-input">
+                                    </div>
+                                    <div class="input-group">
+                                        <label for="entityAddresses">Blockchain Address(es)</label>
+                                        <input type="text" id="entityAddresses" placeholder="0x1f9840a85d5af5bf1d1762f925bdaddc4201f984, 0x..." class="glass-input">
+                                    </div>
+                                </div>
+                                <div class="monitoring-options">
+                                    <label>Monitoring Direction:</label>
+                                    <div class="radio-group">
+                                        <div class="radio-item">
+                                            <input type="radio" id="toAddress" name="monitoring" value="to" checked>
+                                            <label for="toAddress">To the specified address(es)</label>
+                                        </div>
+                                        <div class="radio-item">
+                                            <input type="radio" id="fromAddress" name="monitoring" value="from">
+                                            <label for="fromAddress">From the specified address(es)</label>
+                                        </div>
+                                        <div class="radio-item">
+                                            <input type="radio" id="bothDirections" name="monitoring" value="both">
+                                            <label for="bothDirections">Both directions</label>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="config-section">
+                                <label>Current Racing Entities:</label>
+                                <div class="current-entities" id="currentEntities"></div>
+                            </div>
+                            <div class="config-actions">
+                                <button class="btn-secondary" id="resetConfig">Reset to Default</button>
+                                <button class="btn-primary" id="addEntity">Add Entity</button>
+                                <button class="btn-primary" id="applyConfig">Apply Configuration</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="dashboard" class="page">
+                <div class="dashboard-container">
+                    <div class="placeholder-panel glass-panel">
+                        <div class="placeholder-content">
+                            <div class="placeholder-icon">📊</div>
+                            <h2>Historical Data Dashboard</h2>
+                            <p>Coming Soon!</p>
+                            <div class="placeholder-features">
+                                <div class="feature">📈 Advanced Analytics</div>
+                                <div class="feature">🔍 Deep Insights</div>
+                                <div class="feature">📋 Custom Reports</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="script.js"></script>
+</body>
 </html>

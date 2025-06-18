@@ -1,419 +1,673 @@
-// static/script.js
-// High-Performance WebGL Particle System for Blockchain Transaction Visualization
+class MonadVisualizer {
+  constructor() {
+    this.currentTab = "cityscape";
+    this.eventSource = null;
+    this.derbyEventSource = null; // New EventSource for the Derby
 
-const canvas = document.getElementById('starCanvas');
-const tpsDisplay = document.getElementById('tps-counter');
-const performanceDisplay = document.getElementById('performance-counter');
+    // --- Cityscape State ---
+    this.currentTps = 0;
+    this.blockNumber = 0;
+    this.totalTxFees = 0;
+    this.maxTpsForBar = 8000;
+    this.renderQueue = []; 
+    this.isProcessingQueue = false;
+    this.MAX_QUEUE_SIZE = 500;
+    this.RENDER_THRESHOLD = 10; 
+    this.MAX_RENDER_DELAY = 20; 
+    this.MIN_RENDER_DELAY = 1;
 
-// WebGL context and performance settings
-let gl;
-let program;
-let particleSystem;
-let animationId; // To store requestAnimationFrame ID for potential cancellation
-
-// Performance monitoring
-let frameCount = 0;
-let lastFPSTime = 0;
-let currentFPS = 0;
-
-// Transaction tracking for TPS
-let txCounter = 0; 
-const transactionTimestamps = []; 
-const tpsWindowSeconds = 10;
-const tpsUpdateIntervalMs = 1000; 
-
-// Optimized constants for WebGL particles (from your WebGL example)
-const MAX_PARTICLES = 12000;
-const PARTICLE_LIFESPAN_MS = 450.0; 
-const PARTICLE_BASE_SIZE = 1.0;   
-const DRIFT_SPEED_SCALE = 0.0005; 
-
-// SSE Event name from Python backend (must match)
-const SSE_BATCH_EVENT_NAME = "new_transactions_batch"; // Python backend sends batches with this event name
-const explorerTxBaseUrl = "https://testnet.monadexplorer.com/tx/";
-
-// Vertex shader for particle rendering (from your WebGL example)
-const vertexShaderSource = `
-attribute vec2 a_particlePos;
-attribute float a_size;
-attribute float a_alpha; 
-attribute float a_age;
-attribute vec3 a_color;
-
-uniform vec2 u_resolution;
-uniform float u_time; 
-
-varying float v_alpha_final; 
-varying vec3 v_color;
-varying float v_glowIntensity;
-
-void main() {
-    vec2 zeroToOne = a_particlePos / u_resolution;
-    vec2 clipSpace = (zeroToOne * 2.0 - 1.0) * vec2(1.0, -1.0); 
+    // --- Derby State ---
+    this.derbyConfig = {
+      // This list will be configurable via the modal.
+      // Structure: { "Entity Name": ["0xaddress1", "0xaddress2"], ... }
+      racers: {
+        "LFJ": ["0x45A62B090DF48243F12A21897e7ed91863E2c86b"],
+        "PancakeSwap": ["0x94D220C58A23AE0c2eE29344b00A30D1c2d9F1bc"],
+        "Bean Exchange": ["0xCa810D095e90Daae6e867c19DF6D9A8C56db2c89"],
+        "Ambient Finance": ["0x88B96aF200c8a9c35442C8AC6cd3D22695AaE4F0"],
+        "Izumi Finance": ["0xf6ffe4f3fdc8bbb7f70ffd48e61f17d1e343ddfd"],
+        "Octoswap": ["0xb6091233aAcACbA45225a2B2121BBaC807aF4255"],
+        "Uniswap": ["0x3aE6D8A282D67893e17AA70ebFFb33EE5aa65893"]
+      },
+    };
+    this.racerData = {}; // To store latest TPS data { name: { tps: 0 } }
+    this.racerProgress = {}; // To store visual progress { name: 0 }
+    this.racerWins = {}; // To store win counts { name: 0 }
+    this.raceFinishLine = 0; // Will be set dynamically based on racetrack width
+    this.raceInProgress = true;
+    this.numGridLines = 10;
     
-    gl_Position = vec4(clipSpace, 0.0, 1.0);
+    this.init();
+    window.visualizer = this;
+  }
 
-    float lifeRatio = a_age / ${PARTICLE_LIFESPAN_MS.toFixed(1)};
-    float sizeMultiplier;
-    float alphaMultiplier;
-    
-    if (lifeRatio < 0.3) { 
-        alphaMultiplier = lifeRatio / 0.3;
-        sizeMultiplier = 0.5 + alphaMultiplier * 0.7;
-    } else { 
-        float fadeRatio = (lifeRatio - 0.3) / 0.7;
-        alphaMultiplier = 1.0 - fadeRatio;
-        sizeMultiplier = alphaMultiplier * alphaMultiplier; 
-    }
-    sizeMultiplier = max(0.0, sizeMultiplier);
-    alphaMultiplier = max(0.0, alphaMultiplier);
-    
-    gl_PointSize = a_size * sizeMultiplier * 25.0; 
-    
-    v_alpha_final = a_alpha * alphaMultiplier; 
-    v_color = a_color;
-    v_glowIntensity = sizeMultiplier;
-}
-`;
+  init() {
+    this.setupEventListeners();
+    this.setupGridLines();
+    this.initializeDerby();
+    this.connectToStream(); // Connect to the default cityscape stream first
+  }
 
-// Fragment shader for particle rendering (from your WebGL example)
-const fragmentShaderSource = `
-precision mediump float;
+  // --- Stream Connection Management ---
 
-varying float v_alpha_final;
-varying vec3 v_color;
-varying float v_glowIntensity;
+  connectToStream() {
+    console.log("Connecting to Cityscape firehose stream...");
+    this.closeStreams(); // Ensure no other streams are active
 
-void main() {
-    vec2 coord = gl_PointCoord - vec2(0.5); 
-    float dist = length(coord);
-    
-    float coreAlpha = 1.0 - smoothstep(0.0, 0.35, dist); 
-    float glowAlpha = 1.0 - smoothstep(0.15, 0.5, dist); 
-    glowAlpha = glowAlpha * glowAlpha * 0.6; 
-    
-    float finalIntensity = coreAlpha * 0.8 + glowAlpha * v_glowIntensity;
-    
-    if (finalIntensity < 0.01 || v_alpha_final < 0.01) { discard; }
+    const streamUrl = 'http://localhost:8000/firehose-stream';
+    this.eventSource = new EventSource(streamUrl);
 
-    gl_FragColor = vec4(v_color * finalIntensity, v_alpha_final * finalIntensity * coreAlpha);
-}
-`;
-
-class ParticleSystem {
-    constructor(maxParticles) {
-        this.maxParticles = maxParticles;
-        this.activeParticleCount = 0;
-        this.nextAvailableIndex = 0;
-        
-        this.positions = new Float32Array(maxParticles * 2);
-        this.velocities = new Float32Array(maxParticles * 2);
-        this.sizes = new Float32Array(maxParticles);
-        this.baseAlphas = new Float32Array(maxParticles);
-        this.ages = new Float32Array(maxParticles);
-        this.birthTimes = new Float32Array(maxParticles);
-        this.colors = new Float32Array(maxParticles * 3);
-        this.activeFlags = new Uint8Array(maxParticles);
-        this.txHashes = new Array(maxParticles).fill(null);
-
-        this.setupBuffers();
-    }
-    
-    setupBuffers() {
-        this.positionBuffer = gl.createBuffer();
-        this.sizeBuffer = gl.createBuffer();
-        this.alphaBuffer = gl.createBuffer();
-        this.ageBuffer = gl.createBuffer();
-        this.colorBuffer = gl.createBuffer();
-        
-        const staticPointVertices = new Float32Array(this.maxParticles * 2); 
-        this.staticPointVertexBuffer = gl.createBuffer();
-        gl.bindBuffer(gl.ARRAY_BUFFER, this.staticPointVertexBuffer);
-        gl.bufferData(gl.ARRAY_BUFFER, staticPointVertices, gl.STATIC_DRAW);
-    }
-    
-    addParticle(txData) { 
-        let index = this.nextAvailableIndex;
-        if (!this.activeFlags[index]) {
-            this.activeParticleCount = Math.min(this.activeParticleCount + 1, this.maxParticles);
-        }
-        this.activeFlags[index] = 1;
-        this.nextAvailableIndex = (index + 1) % this.maxParticles;
-
-        const currentTime = performance.now();
-        const canvasCssWidth = canvas.clientWidth;
-        const canvasCssHeight = canvas.clientHeight;
-
-        this.positions[index * 2] = Math.random() * canvasCssWidth;
-        this.positions[index * 2 + 1] = Math.random() * canvasCssHeight;
-        
-        this.velocities[index * 2] = (Math.random() - 0.5) * DRIFT_SPEED_SCALE * canvasCssWidth;
-        this.velocities[index * 2 + 1] = (-0.3 * DRIFT_SPEED_SCALE - Math.random() * 0.3 * DRIFT_SPEED_SCALE) * canvasCssHeight;
-        
-        this.sizes[index] = PARTICLE_BASE_SIZE * (0.8 + Math.random() * 0.4);
-        this.baseAlphas[index] = 1.0;
-        this.ages[index] = 0;
-        this.birthTimes[index] = currentTime;
-        
-        this.colors[index * 3] = 0.8 + Math.random() * 0.2; 
-        this.colors[index * 3 + 1] = 0.8 + Math.random() * 0.2; 
-        this.colors[index * 3 + 2] = 0.9 + Math.random() * 0.1; 
-        
-        this.txHashes[index] = txData.hash; 
-    }
-    
-    update(currentTime) {
-        let currentActive = 0;
-        for (let i = 0; i < this.maxParticles; i++) {
-            if (!this.activeFlags[i]) continue;
-            const age = currentTime - this.birthTimes[i];
-            if (age > PARTICLE_LIFESPAN_MS) {
-                this.activeFlags[i] = 0; this.txHashes[i] = null; this.activeParticleCount--; continue;
+    this.eventSource.onmessage = (event) => {
+        try {
+            const data = JSON.parse(event.data);
+            if(data.error) { console.error("Backend Error:", data.error); return; }
+            this.updateStatsBar(data);
+            if (data.transactions && data.transactions.length > 0) {
+                const overflowCount = (this.renderQueue.length + data.transactions.length) - this.MAX_QUEUE_SIZE;
+                if (overflowCount > 0) this.renderQueue.splice(0, overflowCount);
+                this.renderQueue.push(...data.transactions);
+                if (!this.isProcessingQueue) this.processRenderQueue();
             }
-            this.ages[i] = age;
-            const dtSeconds = 16.67 / 1000; 
-            this.positions[i * 2] += this.velocities[i * 2] * dtSeconds;
-            this.positions[i * 2 + 1] += this.velocities[i * 2 + 1] * dtSeconds;
+        } catch (e) { console.error("Error parsing Cityscape SSE data:", e); }
+    };
+    this.eventSource.onerror = (err) => { console.error("EventSource failed:", err); this.closeStreams(); };
+  }
 
-            const dpr = window.devicePixelRatio || 1;
-            const canvasEffectiveWidth = canvas.width / dpr; 
-            const canvasEffectiveHeight = canvas.height / dpr;
-            if (this.positions[i * 2] < 0 || this.positions[i * 2] > canvasEffectiveWidth ||
-                this.positions[i * 2 + 1] < 0 || this.positions[i * 2 + 1] > canvasEffectiveHeight) {
-                this.activeFlags[i] = 0; this.txHashes[i] = null; this.activeParticleCount--;
-            }
-            currentActive++;
-        }
-        return currentActive; 
-    }
-    
-    render() {
-        if (!gl || !program || this.activeParticleCount === 0) return;
+  connectToDerbyStream() {
+    console.log("Connecting to Perpetual Derby stream...");
+    this.closeStreams(); // Ensure no other streams are active
 
-        const activePositionsData = new Float32Array(this.activeParticleCount * 2);
-        const activeSizesData = new Float32Array(this.activeParticleCount);
-        const activeBaseAlphasData = new Float32Array(this.activeParticleCount);
-        const activeAgesData = new Float32Array(this.activeParticleCount);
-        const activeColorsData = new Float32Array(this.activeParticleCount * 3);
+    const streamUrl = 'http://localhost:8000/derby-stream';
+    this.derbyEventSource = new EventSource(streamUrl);
 
-        let bufferWriteIdx = 0;
-        for (let i = 0; i < this.maxParticles; i++) {
-            if (this.activeFlags[i]) {
-                activePositionsData[bufferWriteIdx * 2]     = this.positions[i * 2];
-                activePositionsData[bufferWriteIdx * 2 + 1] = this.positions[i * 2 + 1];
-                activeSizesData[bufferWriteIdx]             = this.sizes[i];
-                activeBaseAlphasData[bufferWriteIdx]        = this.baseAlphas[i];
-                activeAgesData[bufferWriteIdx]              = this.ages[i];
-                activeColorsData[bufferWriteIdx * 3]        = this.colors[i * 3];
-                activeColorsData[bufferWriteIdx * 3 + 1]    = this.colors[i * 3 + 1];
-                activeColorsData[bufferWriteIdx * 3 + 2]    = this.colors[i * 3 + 2];
-                bufferWriteIdx++;
-            }
-        }
-
-        const particlePosLocation = gl.getAttribLocation(program, 'a_particlePos');
-        const sizeLocation = gl.getAttribLocation(program, 'a_size');
-        const alphaLocation = gl.getAttribLocation(program, 'a_alpha');
-        const ageLocation = gl.getAttribLocation(program, 'a_age');
-        const colorLocation = gl.getAttribLocation(program, 'a_color');
-        const staticPositionLocation = gl.getAttribLocation(program, "a_position");
-
-        gl.bindBuffer(gl.ARRAY_BUFFER, this.positionBuffer); gl.bufferData(gl.ARRAY_BUFFER, activePositionsData, gl.DYNAMIC_DRAW);
-        gl.enableVertexAttribArray(particlePosLocation); gl.vertexAttribPointer(particlePosLocation, 2, gl.FLOAT, false, 0, 0);
-        
-        gl.bindBuffer(gl.ARRAY_BUFFER, this.sizeBuffer); gl.bufferData(gl.ARRAY_BUFFER, activeSizesData, gl.DYNAMIC_DRAW);
-        gl.enableVertexAttribArray(sizeLocation); gl.vertexAttribPointer(sizeLocation, 1, gl.FLOAT, false, 0, 0);
-        
-        gl.bindBuffer(gl.ARRAY_BUFFER, this.alphaBuffer); gl.bufferData(gl.ARRAY_BUFFER, activeBaseAlphasData, gl.DYNAMIC_DRAW);
-        gl.enableVertexAttribArray(alphaLocation); gl.vertexAttribPointer(alphaLocation, 1, gl.FLOAT, false, 0, 0);
-        
-        gl.bindBuffer(gl.ARRAY_BUFFER, this.ageBuffer); gl.bufferData(gl.ARRAY_BUFFER, activeAgesData, gl.DYNAMIC_DRAW);
-        gl.enableVertexAttribArray(ageLocation); gl.vertexAttribPointer(ageLocation, 1, gl.FLOAT, false, 0, 0);
-
-        gl.bindBuffer(gl.ARRAY_BUFFER, this.colorBuffer); gl.bufferData(gl.ARRAY_BUFFER, activeColorsData, gl.DYNAMIC_DRAW);
-        gl.enableVertexAttribArray(colorLocation); gl.vertexAttribPointer(colorLocation, 3, gl.FLOAT, false, 0, 0);
-        
-        gl.bindBuffer(gl.ARRAY_BUFFER, this.staticPointVertexBuffer);
-        gl.enableVertexAttribArray(staticPositionLocation);
-        gl.vertexAttribPointer(staticPositionLocation, 2, gl.FLOAT, false, 0, 0); 
-        
-        gl.drawArrays(gl.POINTS, 0, this.activeParticleCount);
-    }
-}
-
-function createShader(glContext, type, source) {
-    const shader = glContext.createShader(type); glContext.shaderSource(shader, source); glContext.compileShader(shader);
-    if (!glContext.getShaderParameter(shader, glContext.COMPILE_STATUS)) {
-        console.error(`Shader compilation error (${type === gl.VERTEX_SHADER ? 'Vertex' : 'Fragment'} Shader):`, glContext.getShaderInfoLog(shader));
-        glContext.deleteShader(shader); return null;
-    } return shader;
-}
-function createProgram(glContext, vertexShader, fragmentShader) {
-    const prog = glContext.createProgram(); glContext.attachShader(prog, vertexShader); glContext.attachShader(prog, fragmentShader); glContext.linkProgram(prog);
-    if (!glContext.getProgramParameter(prog, glContext.LINK_STATUS)) {
-        console.error('Program linking error:', glContext.getProgramInfoLog(prog));
-        glContext.deleteProgram(prog); return null;
-    } return prog;
-}
-
-function initWebGL() {
-    gl = canvas.getContext('webgl', { preserveDrawingBuffer: false, antialias: true }) || 
-         canvas.getContext('experimental-webgl', { preserveDrawingBuffer: false, antialias: true });
-    if (!gl) {
-        console.error('WebGL not supported! Please use a modern browser.');
-        if(performanceDisplay) performanceDisplay.textContent = "WebGL Not Supported!";
-        return false;
-    }
-    const vertexShader = createShader(gl, gl.VERTEX_SHADER, vertexShaderSource);
-    const fragmentShader = createShader(gl, gl.FRAGMENT_SHADER, fragmentShaderSource);
-    if (!vertexShader || !fragmentShader) return false;
-    program = createProgram(gl, vertexShader, fragmentShader);
-    if (!program) return false;
-    gl.useProgram(program); gl.enable(gl.BLEND);
-    gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
-    particleSystem = new ParticleSystem(MAX_PARTICLES);
-    console.log('WebGL particle system initialized.');
-    return true;
-}
-
-function resizeCanvasAndWebGLContext() {
-    const dpr = window.devicePixelRatio || 1;
-    const displayWidth = canvas.clientWidth;  
-    const displayHeight = canvas.clientHeight;
-    const newBufferWidth = Math.round(displayWidth * dpr);
-    const newBufferHeight = Math.round(displayHeight * dpr);
-    if (canvas.width !== newBufferWidth || canvas.height !== newBufferHeight) {
-        canvas.width = newBufferWidth; canvas.height = newBufferHeight;
-        if (gl && program) { 
-            gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
-            const resolutionLocation = gl.getUniformLocation(program, 'u_resolution');
-            gl.uniform2f(resolutionLocation, gl.drawingBufferWidth, gl.drawingBufferHeight);
-        }
-    }
-}
-
-let lastFrameTimeMs = 0;
-function renderLoop(currentTimeMs) { 
-    animationId = requestAnimationFrame(renderLoop); 
-    if (!gl || !particleSystem || !program) return;
-    resizeCanvasAndWebGLContext(); 
-    frameCount++;
-    const nowMs = performance.now();
-    if (nowMs - lastFPSTime >= 1000) { currentFPS = frameCount; lastFPSTime = nowMs; frameCount = 0; }
-    gl.clearColor(0.0, 0.0, 0.0, 0.0); 
-    gl.clear(gl.COLOR_BUFFER_BIT);
-    const activeParticles = particleSystem.update(nowMs); 
-    const timeLocation = gl.getUniformLocation(program, 'u_time');
-    if (timeLocation !== null) { gl.uniform1f(timeLocation, nowMs * 0.001); }
-    particleSystem.render();
-    if (performanceDisplay) { performanceDisplay.textContent = `Stars: ${activeParticles} | FPS: ${currentFPS}`; }
-    lastFrameTimeMs = currentTimeMs;
-}
-
-function updateTPSDisplay() {
-    const now = Date.now();
-    while (transactionTimestamps.length > 0 && transactionTimestamps[0] < now - (tpsWindowSeconds * 1000)) {
-        transactionTimestamps.shift();
-    }
-    const tps = (transactionTimestamps.length / tpsWindowSeconds).toFixed(1);
-    if (tpsDisplay) { tpsDisplay.textContent = `TPS: ${tps}`; }
-}
-
-canvas.addEventListener('click', function(event) {
-    if (!particleSystem || !gl) return;
-    const rect = canvas.getBoundingClientRect();
-    const clickX_css = event.clientX - rect.left;
-    const clickY_css = event.clientY - rect.top;
-
-    for (let i = 0; i < particleSystem.maxParticles; i++) {
-        if (particleSystem.activeFlags[i]) {
-            const particleX_css = particleSystem.positions[i * 2]; 
-            const particleY_css = particleSystem.positions[i * 2 + 1];
+    this.derbyEventSource.onmessage = (event) => {
+        try {
+            const data = JSON.parse(event.data);
+            if (data.error) { console.error("Backend Derby Error:", data.error); return; }
             
-            // Approximate visual size for click radius.
-            const age = performance.now() - particleSystem.birthTimes[i];
-            let currentVisualSizeFactor = 0;
-            if (age <= PARTICLE_LIFESPAN_MS) {
-                const lifeRatio = age / PARTICLE_LIFESPAN_MS;
-                 if (lifeRatio < 0.3) { 
-                    currentVisualSizeFactor = 0.5 + (lifeRatio / 0.3) * 0.7;
-                } else { 
-                    const fadeRatio = (lifeRatio - 0.3) / 0.7;
-                    currentVisualSizeFactor = (1.0 - fadeRatio) * (1.0 - fadeRatio); 
-                }
-                currentVisualSizeFactor = Math.max(0.0, currentVisualSizeFactor);
-            }
-            const clickRadius = particleSystem.sizes[i] * currentVisualSizeFactor * 25.0 * 0.5 / (window.devicePixelRatio || 1); // Approx half of gl_PointSize in CSS px
+            // Update racer data and UI
+            this.racerData = data;
+            this.updateDerbyUI();
 
-            const dx = clickX_css - particleX_css;
-            const dy = clickY_css - particleY_css;
-            if (dx * dx + dy * dy < clickRadius * clickRadius) {
-                const txHash = particleSystem.txHashes[i];
-                if (txHash && txHash !== 'N/A') {
-                    window.open(`${explorerTxBaseUrl}${txHash}`, '_blank');
-                    return; 
-                }
-            }
+        } catch (e) { console.error("Error parsing Derby SSE data:", e); }
+    };
+    this.derbyEventSource.onerror = (err) => { console.error("Derby EventSource failed:", err); this.closeStreams(); };
+  }
+
+  closeStreams() {
+    if (this.eventSource) {
+      this.eventSource.close();
+      this.eventSource = null;
+      console.log("Closed cityscape stream.");
+    }
+    if (this.derbyEventSource) {
+      this.derbyEventSource.close();
+      this.derbyEventSource = null;
+      console.log("Closed derby stream.");
+    }
+  }
+
+  // --- Cityscape Methods ---
+
+  processRenderQueue() { /* ... (previous implementation is correct, no changes needed) ... */
+    this.isProcessingQueue = true;
+    if (this.renderQueue.length === 0) { this.isProcessingQueue = false; return; }
+    const itemsToRenderCount = this.renderQueue.length > this.RENDER_THRESHOLD ? 3 : 1;
+    for (let i = 0; i < itemsToRenderCount; i++) {
+        const tx = this.renderQueue.shift();
+        if (tx) {
+            const transaction = { type: this.getTransactionType(tx.value), hash: tx.hash, timestamp: new Date().toISOString(), value: parseFloat(tx.value) || 0 };
+            this.createTransactionBar(transaction);
+            this.addToDataFeed(transaction);
         }
     }
-});
+    const delay = Math.max(this.MIN_RENDER_DELAY, this.MAX_RENDER_DELAY - Math.floor(this.renderQueue.length / 10));
+    setTimeout(() => { this.processRenderQueue(); }, delay);
+  }
+  updateStatsBar(data) { /* ... (previous implementation is correct, no changes needed) ... */
+    if (!data) return;
+    const tpsValueElement = document.getElementById('liveTpsValue');
+    const tpsGaugeInnerElement = document.getElementById('tpsGaugeInner');
+    if (tpsValueElement && tpsGaugeInnerElement && data.tps !== undefined) {
+        this.currentTps = data.tps;
+        tpsValueElement.textContent = this.currentTps.toFixed(1);
+        const gaugePercentage = Math.min(100, (this.currentTps / this.maxTpsForBar) * 100);
+        tpsGaugeInnerElement.style.width = `${gaugePercentage}%`;
+    }
+    const blockElement = document.getElementById('blockNumberValue');
+    if (blockElement && data.latest_block && data.latest_block.number) {
+        this.blockNumber = data.latest_block.number;
+        blockElement.textContent = this.blockNumber.toLocaleString();
+    }
+    const feesElement = document.getElementById('txFeesValue');
+    if (feesElement && data.total_fees_in_batch !== undefined) {
+        this.totalTxFees += data.total_fees_in_batch;
+        feesElement.textContent = this.totalTxFees.toFixed(4);
+    }
+  }
+  getTransactionType(value) { /* ... (previous implementation is correct, no changes needed) ... */
+      const monValue = parseFloat(value);
+      if (monValue > 1000) return 'supernova';
+      if (monValue > 100) return 'large';
+      if (monValue > 20) return 'medium';
+      return 'small';
+  }
+  addToDataFeed(transaction) { /* ... (previous implementation is correct, no changes needed) ... */
+    const feed = document.getElementById('dataFeed');
+    if (!feed) return;
+    const feedItem = document.createElement('a');
+    feedItem.className = 'feed-item';
+    feedItem.href = `https://testnet.monadexplorer.com/tx/${transaction.hash}`;
+    feedItem.target = '_blank';
+    feedItem.rel = 'noopener noreferrer';
+    const timestamp = new Date(transaction.timestamp).toLocaleTimeString();
+    const value = transaction.value.toFixed(2);
+    feedItem.innerHTML = `<span class="timestamp">${timestamp}</span><span class="action">${transaction.type.toUpperCase()}</span><span class="details">${value} MON</span>`;
+    feed.insertBefore(feedItem, feed.firstChild);
+    while (feed.children.length > 30) {
+      feed.removeChild(feed.lastChild);
+    }
+  }
+  createTransactionBar(transaction) { /* ... (previous implementation is correct, no changes needed) ... */
+    const container = document.querySelector(".transaction-container");
+    if (!container) return;
+    const bar = document.createElement("div");
+    bar.classList.add("transaction-bar", transaction.type, "animated");
+    if (transaction.type === 'supernova') bar.classList.add('supernova');
+    const minHeight = 2, maxHeight = 80, scaleFactor = 4;
+    let height = minHeight + Math.log1p(transaction.value) * scaleFactor;
+    height = Math.min(height, maxHeight);
+    bar.style.height = `${height}px`;
+    const columnWidth = container.clientWidth / this.numGridLines;
+    const columnIndex = Math.floor(Math.random() * this.numGridLines);
+    const x = columnIndex * columnWidth + (columnWidth / 2);
+    const width = Math.random() * 60 + 40;
+    bar.style.width = `${width}px`;
+    bar.style.left = `${x}px`;
+    bar.style.top = `${container.clientHeight + 20}px`;
+    const monadColors = ["monad-purple", "monad-berry", "monad-off-white"];
+    let colorClass = monadColors[Math.floor(Math.random() * monadColors.length)];
+    if (transaction.type === "supernova") colorClass = "monad-off-white";
+    else if (transaction.type === "large") {
+      const largeTxColors = ["monad-purple", "monad-off-white"];
+      colorClass = largeTxColors[Math.floor(Math.random() * largeTxColors.length)];
+    }
+    bar.classList.add(colorClass);
+    container.appendChild(bar);
+    setTimeout(() => { if (bar.parentNode) bar.remove(); }, 4000);
+  }
+  setupGridLines() { /* ... (previous implementation is correct, no changes needed) ... */
+    const container = document.querySelector('.grid-lines');
+    if (!container) return;
+    container.innerHTML = '';
+    for (let i = 0; i < this.numGridLines; i++) {
+        const line = document.createElement('div');
+        line.className = 'grid-line';
+        container.appendChild(line);
+    }
+  }
+  
+  // --- Derby Methods ---
+  
+  initializeDerby() {
+    console.log("Initializing Derby with current config...");
+    
+    // Initialize win counts for all racers
+    Object.keys(this.derbyConfig.racers).forEach(name => {
+        if (!this.racerWins[name]) {
+            this.racerWins[name] = 0;
+        }
+        if (!this.racerProgress[name]) {
+            this.racerProgress[name] = 0;
+        }
+    });
+    
+    this.setupRacetrack();
+    this.updateScoreboard();
+    // No stream connection here, it's handled by tab switching or applying config
+  }
 
-function init() {
-    if (!initWebGL()) { 
-        const starContainer = document.getElementById('star-canvas-container');
-        if(starContainer) starContainer.innerHTML = "<p style='color:red; text-align:center; padding-top: 50px;'>WebGL not supported or failed to initialize. Cannot display stars.</p>";
+  updateDerbyUI() {
+    if (!this.racerData) {
+      console.log("No racer data available");
+      return;
+    }
+    console.log("Derby UI update - Racer data:", this.racerData);
+    console.log("Derby UI update - Current racers config:", Object.keys(this.derbyConfig.racers));
+    this.updateRacerProgress();
+    this.updateScoreboard();
+  }
+
+  updateRacerProgress() {
+    const racetrack = document.getElementById('racetrack');
+    if (!racetrack) {
+        console.error("❌ Racetrack not found in updateRacerProgress");
         return;
     }
-    resizeCanvasAndWebGLContext(); 
-    window.addEventListener('resize', resizeCanvasAndWebGLContext);
-    setInterval(updateTPSDisplay, tpsUpdateIntervalMs);
-    lastFPSTime = performance.now();
-    renderLoop(performance.now()); 
-    console.log('High-performance WebGL particle system ready.');
+
+    let someoneFinished = false;
+    let winners = [];
+    let debugInfo = [];
+
+    Object.keys(this.derbyConfig.racers).forEach(name => {
+        const tps = this.racerData[name] ? this.racerData[name].tps : 0;
+        const currentProgress = this.racerProgress[name] || 0;
+        
+        // The movement increment is now based on TPS. Adjust the factor for good visual speed.
+        const movement = tps * 15; 
+        this.racerProgress[name] = currentProgress + movement;
+
+        // Check if this racer finished the race
+        if (this.racerProgress[name] >= this.raceFinishLine) {
+            someoneFinished = true;
+            winners.push(name);
+            // Initialize win count if not exists
+            if (!this.racerWins[name]) {
+                this.racerWins[name] = 0;
+            }
+            this.racerWins[name]++;
+            console.log(`🏆 ${name} wins! Total wins: ${this.racerWins[name]}`);
+        }
+
+        const racerElement = racetrack.querySelector(`.racer[data-name="${name}"]`);
+        if (racerElement) {
+            // Use left position instead of transform for better visibility
+            const startPosition = 150; // Starting position after labels
+            const newPosition = startPosition + this.racerProgress[name];
+            racerElement.style.left = `${newPosition}px`;
+            
+            debugInfo.push({
+                name: name,
+                tps: tps.toFixed(2),
+                progress: this.racerProgress[name].toFixed(1),
+                position: newPosition.toFixed(1),
+                element: !!racerElement
+            });
+        } else {
+            console.warn(`❌ Racer element not found for ${name}`);
+            debugInfo.push({
+                name: name,
+                tps: tps.toFixed(2),
+                progress: this.racerProgress[name].toFixed(1),
+                position: 'N/A',
+                element: false
+            });
+        }
+    });
+
+    // Log debug info every few updates (to avoid spam)
+    if (Math.random() < 0.1) { // 10% chance to log
+        console.table(debugInfo);
+    }
+
+    // Reset race if someone finished
+    if (someoneFinished) {
+        console.log(`🏁 Race finished! Winners: ${winners.join(', ')}`);
+        this.resetRace();
+    }
+  }
+
+  updateScoreboard() {
+    const scoreboard = document.getElementById('scoreboardContent');
+    if (!scoreboard) return;
+    
+    // Create an array from the racer data to sort it
+    const sortedRacers = Object.keys(this.derbyConfig.racers).map(name => ({
+        name: name,
+        tps: this.racerData[name] ? this.racerData[name].tps : 0,
+        wins: this.racerWins[name] || 0,
+        progress: this.racerProgress[name] || 0
+    })).sort((a, b) => b.tps - a.tps);
+
+    scoreboard.innerHTML = ''; // Clear previous entries
+    sortedRacers.forEach((racer, index) => {
+        const scoreItem = document.createElement('div');
+        scoreItem.className = 'scoreboard-item';
+        const progressPercent = ((racer.progress / this.raceFinishLine) * 100).toFixed(1);
+        scoreItem.innerHTML = `
+            <div class="rank">${index + 1}</div>
+            <div class="racer-name">${racer.name}</div>
+            <div class="racer-stats">
+                <div class="racer-tps">${racer.tps.toFixed(2)} TPS</div>
+                <div class="racer-wins">🏆 ${racer.wins}</div>
+                <div class="racer-progress">${progressPercent}%</div>
+            </div>
+        `;
+        scoreboard.appendChild(scoreItem);
+    });
+  }
+
+  resetRace() {
+    console.log("🔄 Resetting race - all horses back to starting line!");
+    
+    // Reset all progress to 0
+    Object.keys(this.derbyConfig.racers).forEach(name => {
+        this.racerProgress[name] = 0;
+        
+        // Reset visual position
+        const racerElement = document.querySelector(`.racer[data-name="${name}"]`);
+        if (racerElement) {
+            racerElement.style.left = `150px`; // Back to starting position
+        }
+    });
+    
+    // Update scoreboard to reflect reset
+    this.updateScoreboard();
+  }
+
+  setupRacetrack() {
+    const racetrack = document.getElementById('racetrack');
+    if (!racetrack) {
+        console.error("❌ Racetrack element not found!");
+        return;
+    }
+
+    console.log("🏁 Setting up racetrack...");
+    racetrack.innerHTML = ''; // Clear existing racers
+    this.racerProgress = {}; // Reset progress
+
+    // Calculate finish line based on racetrack width
+    // Leave some margin (100px) so horses don't go completely off-screen
+    this.raceFinishLine = racetrack.clientWidth - 250; // Account for starting position (150px) + margin (100px)
+    console.log(`🏁 Finish line set to ${this.raceFinishLine}px (racetrack width: ${racetrack.clientWidth}px)`);
+
+    // Add visual finish line
+    const existingFinishLine = racetrack.querySelector('.finish-line');
+    if (existingFinishLine) {
+        existingFinishLine.remove();
+    }
+    
+    const finishLine = document.createElement('div');
+    finishLine.className = 'finish-line';
+    finishLine.style.left = `${150 + this.raceFinishLine}px`; // Position at actual finish
+    racetrack.appendChild(finishLine);
+    console.log("🏁 Finish line created and positioned");
+
+    const racerNames = Object.keys(this.derbyConfig.racers);
+    console.log(`🏎️ Creating ${racerNames.length} racers:`, racerNames);
+
+    racerNames.forEach((name, index) => {
+        const laneY = index * 60 + 20; // More space between lanes (60px instead of 50px)
+        
+        // Create the racer element
+        const racer = document.createElement('div');
+        racer.className = 'racer';
+        racer.dataset.name = name;
+        racer.style.top = `${laneY}px`;
+        racer.style.left = '150px'; // Ensure starting position is set
+        
+        // Create the lane label (stays on the left)
+        const laneLabel = document.createElement('div');
+        laneLabel.className = 'lane-label';
+        laneLabel.textContent = name;
+        laneLabel.style.top = `${laneY}px`;
+        laneLabel.style.left = '10px'; // Fixed position on the left
+        
+        // Create the racing lane background
+        const lane = document.createElement('div');
+        lane.className = 'racing-lane';
+        lane.style.top = `${laneY - 5}px`; // Slightly above racer for background
+        lane.style.height = '50px';
+        lane.dataset.lane = index;
+        
+        racetrack.appendChild(lane);
+        racetrack.appendChild(laneLabel);
+        racetrack.appendChild(racer);
+        
+        console.log(`🏎️ Created racer "${name}" at lane ${index}, position (150px, ${laneY}px)`);
+    });
+    
+    console.log(`✅ Racetrack setup complete! Total elements in racetrack: ${racetrack.children.length}`);
+  }
+
+  // --- Tab Management ---
+
+  switchTab(tabName) {
+    if (this.currentTab === tabName) return;
+    this.currentTab = tabName;
+    console.log(`Switched to ${tabName} tab.`);
+
+    document.querySelectorAll('.page').forEach(page => page.classList.remove('active'));
+    document.getElementById(tabName)?.classList.add('active');
+
+    document.querySelectorAll('.tab-button').forEach(btn => btn.classList.remove('active'));
+    document.querySelector(`.tab-button[data-tab="${tabName}"]`)?.classList.add('active');
+    
+    this.closeStreams();
+
+    if (tabName === 'cityscape') {
+        this.connectToStream();
+    } else if (tabName === 'derby') {
+        this.initializeDerby();
+        this.connectToDerbyStream();
+    } else {
+      // Handle other tabs like dashboard if they need specific connections
+    }
+  }
+
+  // --- Derby Configuration Modal Methods ---
+
+  updateCurrentEntities() {
+    const container = document.getElementById('currentEntities');
+    if (!container) return;
+
+    container.innerHTML = '';
+    Object.keys(this.derbyConfig.racers).forEach(name => {
+        const tag = document.createElement('div');
+        tag.className = 'entity-tag';
+        tag.innerHTML = `${name} <button class="remove-btn" data-entity="${name}">×</button>`;
+        container.appendChild(tag);
+    });
+
+    container.querySelectorAll('.remove-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation(); // Prevent modal from closing
+            this.removeEntity(btn.dataset.entity);
+        });
+    });
+  }
+
+  removeEntity(entityName) {
+    delete this.derbyConfig.racers[entityName];
+    this.updateCurrentEntities();
+  }
+
+  addEntity() {
+    console.log("addEntity() called");
+    const nameInput = document.getElementById('entityName');
+    const addressesInput = document.getElementById('entityAddresses');
+    
+    if (!nameInput) {
+        console.error("entityName input not found");
+        return;
+    }
+    if (!addressesInput) {
+        console.error("entityAddresses input not found");
+        return;
+    }
+
+    const name = nameInput.value.trim();
+    const addressInput = addressesInput.value.trim();
+    
+    console.log("Name:", name);
+    console.log("Address input:", addressInput);
+
+    if (!name) {
+        alert("Please provide an entity name.");
+        return;
+    }
+
+    if (!addressInput) {
+        alert("Please provide at least one address.");
+        return;
+    }
+
+    // Split by comma, trim whitespace, and filter out empty strings
+    const addresses = addressInput.split(',')
+        .map(addr => addr.trim())
+        .filter(addr => addr.length > 0); // More permissive validation for testing
+
+    console.log("Parsed addresses:", addresses);
+
+    if (addresses.length === 0) {
+        alert("Please provide valid addresses (comma-separated if multiple).");
+        return;
+    }
+
+    if (this.derbyConfig.racers[name]) {
+        console.warn(`Entity ${name} already exists. Overwriting addresses.`);
+    }
+    
+    this.derbyConfig.racers[name] = addresses;
+    console.log("Updated racers config:", this.derbyConfig.racers);
+    
+    this.updateCurrentEntities();
+    nameInput.value = '';
+    addressesInput.value = '';
+    
+    console.log("Entity added successfully");
+  }
+
+  openConfigModal() {
+    const modal = document.getElementById('configModal');
+    if (modal) {
+        this.updateCurrentEntities(); // Make sure the list is up-to-date when opening
+        modal.classList.add('active');
+    }
+  }
+
+  closeConfigModal() {
+    const modal = document.getElementById('configModal');
+    if (modal) modal.classList.remove('active');
+  }
+
+  async applyConfiguration() {
+    console.log("Applying new Derby configuration...");
+
+    const entitiesPayload = Object.keys(this.derbyConfig.racers).map(name => ({
+        name: name,
+        addresses: this.derbyConfig.racers[name]
+    }));
+
+    try {
+        const response = await fetch('http://localhost:8000/update-derby-config', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ entities: entitiesPayload })
+        });
+
+        if (!response.ok) {
+            throw new Error(`Failed to update config: ${response.statusText}`);
+        }
+
+        const result = await response.json();
+        console.log("Backend response:", result.message);
+        
+        this.closeConfigModal();
+        
+        // Reset all progress when configuration changes to ensure fair start
+        this.resetRace();
+        
+        // Initialize win counts for new entities
+        Object.keys(this.derbyConfig.racers).forEach(name => {
+            if (!this.racerWins[name]) {
+                this.racerWins[name] = 0;
+            }
+        });
+        
+        // Re-initialize the derby with the new settings and reconnect the stream
+        if (this.currentTab === 'derby') {
+            this.initializeDerby();
+        }
+
+    } catch (error) {
+        console.error("Error applying configuration:", error);
+        alert("Could not apply the new configuration. Please check the console for details.");
+    }
+  }
+
+  resetConfiguration() {
+    console.log("Resetting Derby configuration to default.");
+    // This now just resets the local config.
+    // applyConfiguration must be called to send it to the backend.
+    this.derbyConfig.racers = {
+      "LFJ": ["0x45A62B090DF48243F12A21897e7ed91863E2c86b"],
+      "PancakeSwap": ["0x94D220C58A23AE0c2eE29344b00A30D1c2d9F1bc"],
+      "Bean Exchange": ["0xCa810D095e90Daae6e867c19DF6D9A8C56db2c89"],
+      "Ambient Finance": ["0x88B96aF200c8a9c35442C8AC6cd3D22695AaE4F0"],
+      "Izumi Finance": ["0xf6ffe4f3fdc8bbb7f70ffd48e61f17d1e343ddfd"],
+      "Octoswap": ["0xb6091233aAcACbA45225a2B2121BBaC807aF4255"],
+      "Uniswap": ["0x3aE6D8A282D67893e17AA70ebFFb33EE5aa65893"]
+    };
+    this.updateCurrentEntities(); // Update the UI in the modal
+    // We don't auto-apply, user must click "Apply Configuration"
+  }
+
+  setupEventListeners() {
+    document.querySelectorAll('.tab-button').forEach(button => {
+        button.addEventListener('click', () => this.switchTab(button.dataset.tab));
+    });
+
+    // --- Derby Modal Listeners ---
+    const configButton = document.getElementById('configButton');
+    const closeModal = document.getElementById('closeModal');
+    const addEntityButton = document.getElementById('addEntity');
+    const applyConfigButton = document.getElementById('applyConfig');
+    const resetConfigButton = document.getElementById('resetConfig');
+
+    if (configButton) {
+        configButton.addEventListener('click', () => this.openConfigModal());
+        console.log("Config button event listener added");
+    } else {
+        console.error("configButton not found");
+    }
+
+    if (closeModal) {
+        closeModal.addEventListener('click', () => this.closeConfigModal());
+        console.log("Close modal event listener added");
+    } else {
+        console.error("closeModal button not found");
+    }
+
+    if (addEntityButton) {
+        addEntityButton.addEventListener('click', () => {
+            console.log("Add entity button clicked");
+            this.addEntity();
+        });
+        console.log("Add entity button event listener added");
+    } else {
+        console.error("addEntity button not found");
+    }
+
+    if (applyConfigButton) {
+        applyConfigButton.addEventListener('click', () => this.applyConfiguration());
+        console.log("Apply config button event listener added");
+    } else {
+        console.error("applyConfig button not found");
+    }
+
+    if (resetConfigButton) {
+        resetConfigButton.addEventListener('click', () => this.resetConfiguration());
+        console.log("Reset config button event listener added");
+    } else {
+        console.error("resetConfig button not found");
+    }
+    
+    window.addEventListener('resize', () => {
+        if (this.currentTab === 'cityscape') {
+            this.setupGridLines();
+        } else if (this.currentTab === 'derby') {
+            // Recalculate finish line when window is resized
+            const racetrack = document.getElementById('racetrack');
+            if (racetrack) {
+                this.raceFinishLine = racetrack.clientWidth - 100;
+                console.log(`🏁 Finish line updated to ${this.raceFinishLine}px due to resize`);
+            }
+        }
+    });
+  }
 }
 
-const eventSource = new EventSource('/transaction-stream');
-
-eventSource.onopen = function() {
-    console.log(`JS: SSE Stream connected. Listening for '${SSE_BATCH_EVENT_NAME}' events...`);
-};
-
-// MODIFIED TO HANDLE BATCHED EVENTS
-eventSource.addEventListener(SSE_BATCH_EVENT_NAME, function(event) {
-    // console.log("JS: Received raw data for batch event:", event.data); 
-    try {
-        const txBatch = JSON.parse(event.data);
-        // console.log("JS: Parsed txBatch:", txBatch); 
-
-        if (Array.isArray(txBatch)) {
-            // console.log(`JS: Processing batch of ${txBatch.length} transactions.`);
-            for (const txData of txBatch) {
-                if (particleSystem && typeof particleSystem.addParticle === 'function') {
-                    transactionTimestamps.push(Date.now());
-                    particleSystem.addParticle(txData); 
-                } else {
-                     console.error("JS ERROR: particleSystem not initialized or addParticle is not a function!");
-                }
-            }
-        } else {
-             console.error("JS ERROR: Received non-array data for batch event. Data:", txBatch);
-        }
-    } catch (e) {
-        console.error("JS ERROR: Failed to parse or process transaction batch data:", e, "Problematic data was:", event.data);
-    }
-});
-
-eventSource.onerror = function(err) { 
-    console.error("JS: EventSource failed:", err); 
-};
-
-document.addEventListener('DOMContentLoaded', init);
-
-window.addEventListener('beforeunload', function() {
-    if (animationId) {
-        cancelAnimationFrame(animationId);
-    }
-    if (eventSource) {
-        eventSource.close();
-    }
+document.addEventListener("DOMContentLoaded", () => {
+  new MonadVisualizer();
 });

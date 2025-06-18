@@ -1,400 +1,327 @@
 import asyncio
 import json
 import os
+import sys
 import time
 import traceback
-import sys
 from contextlib import asynccontextmanager
+from collections import defaultdict, deque
+from typing import List, Dict, Any, AsyncGenerator, Tuple
 
 import hypersync
-from hypersync import TransactionField, BlockField, TransactionSelection, ClientConfig, Query, FieldSelection
-from dotenv import load_dotenv
-from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse
-from fastapi.staticfiles import StaticFiles
 import uvicorn
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from hypersync import BlockField, TransactionField, TransactionSelection, ClientConfig, Query, FieldSelection
+from dotenv import load_dotenv
+from pydantic import BaseModel
 
 # --- Configuration ---
 load_dotenv()
-MONAD_HYPERSYNC_URL = "https://monad-testnet.hypersync.xyz"
+MONAD_HYPERSYNC_URL = os.getenv("MONAD_HYPERSYNC_URL", "https://monad-testnet.hypersync.xyz")
+HYPERSYNC_BEARER_TOKEN = os.getenv("HYPERSYNC_BEARER_TOKEN")
+# This is now the interval for fetching large batches
+CITYSCAPE_POLLING_INTERVAL = 5.0
+DERBY_POLLING_INTERVAL = 2.0
+ERROR_RETRY_DELAY_SECONDS = 5
+TPS_MEMORY_SECONDS = 10 
+HOST = os.getenv("HOST", "0.0.0.0")
+PORT = int(os.getenv("PORT", 8000))
 
-# OPTIMIZED POLLING CONFIGURATION
-# Adaptive polling intervals based on activity
-TIP_POLL_INTERVAL_BASE = 0.2  # Reduced from 0.4s for faster response
-TIP_POLL_INTERVAL_FAST = 0.1  # For when we expect activity
-TIP_POLL_INTERVAL_SLOW = 0.5  # For when no activity detected
-BACKLOG_POLL_INTERVAL_SECONDS = 0.03  # Reduced from 0.05s for faster catch-up
-ERROR_RETRY_DELAY_SECONDS = 3  # Reduced from 5s
+# --- Preset DEX Contract Information (for the Derby Tracker) ---
+DEX_CONTRACTS = {
+    "LFJ": "0x45A62B090DF48243F12A21897e7ed91863E2c86b",
+    "PancakeSwap": "0x94D220C58A23AE0c2eE29344b00A30D1c2d9F1bc",
+    "Bean Exchange": "0xCa810D095e90Daae6e867c19DF6D9A8C56db2c89",
+    "Ambient Finance": "0x88B96aF200c8a9c35442C8AC6cd3D22695AaE4F0",
+    "Izumi Finance": "0xf6ffe4f3fdc8bbb7f70ffd48e61f17d1e343ddfd",
+    "Octoswap": "0xb6091233aAcACbA45225a2B2121BBaC807aF4255",
+    "Uniswap": "0x3aE6D8A282D67893e17AA70ebFFb33EE5aa65893",
+}
 
-# Block management
-BLOCK_CATCH_UP_OFFSET = 2  # Reduced from 3 for tighter following
-TIP_QUERY_RANGE_ACTIVE = 3  # Smaller range when activity detected
-TIP_QUERY_RANGE_INACTIVE = 2  # Even smaller when no activity
-MAX_CATCH_UP_BATCH_SIZE = 50  # Explicit batch size for catch-up
+# This will now be our dynamic configuration, initialized with the defaults.
+# The structure is { "entityName": ["0xaddress1", "0xaddress2", ...], ... }
+DERBY_TRACKER_CONFIG: Dict[str, List[str]] = {
+    name: [address] for name, address in DEX_CONTRACTS.items()
+}
 
-# Height refresh strategy - more intelligent timing
-GET_HEIGHT_REFRESH_FAST_INTERVAL = 1.0  # When we expect new blocks
-GET_HEIGHT_REFRESH_SLOW_INTERVAL = 3.0  # When no activity
-GET_HEIGHT_REFRESH_ON_EMPTY_QUERIES = 2  # Refresh after N empty queries
+# --- Pydantic Models for API ---
+class DerbyEntity(BaseModel):
+    name: str
+    addresses: List[str]
 
-# Queue configuration
-TRANSACTION_QUEUE = asyncio.Queue(maxsize=8000)  # Increased size
-PROCESSED_TX_HASHES = set()
-MAX_PROCESSED_TX_HASHES = 50000  # Prevent memory growth
+class UpdateDerbyConfigRequest(BaseModel):
+    entities: List[DerbyEntity]
 
-# SSE Configuration
-SSE_EVENT_NAME = "new_transactions_batch"
-SSE_BATCH_MAX_SIZE = 150  # Increased for better throughput
-SSE_BATCH_MAX_WAIT_SECONDS = 0.05  # Reduced for lower latency
-SSE_KEEP_ALIVE_TIMEOUT = 20.0
-
-hypersync_client: hypersync.HypersyncClient | None = None
-poller_start_block = 0
-
-# Helper print functions
-def print_general_red(msg, file=sys.stderr): print(f"\033[91mERROR: {msg}\033[0m", file=file, flush=True)
-def print_general_yellow(msg, file=sys.stderr): print(f"\033[93mWARNING: {msg}\033[0m", file=file, flush=True)
-def print_general_info(msg_prefix, message, file=sys.stderr): print(f"{msg_prefix.upper()} INFO: {message}", file=file, flush=True)
-def print_poller_log(log_type, iter_count, message, file=sys.stderr):
-    color_code = ""
-    if log_type == "ERROR": color_code = "\033[91m"
-    elif log_type == "WARNING": color_code = "\033[93m"
-    end_color_code = "\033[0m" if color_code else ""
-    print(f"{color_code}BG POLLER {log_type.upper()} (Iter: {iter_count}): {message}{end_color_code}", file=file, flush=True)
-
-
-class AdaptivePollingState:
-    """Manages adaptive polling state for optimized performance"""
-    def __init__(self):
-        self.consecutive_empty_queries = 0
-        self.last_activity_time = time.time()
-        self.last_height_refresh = 0
-        self.recent_tx_count = 0
-        self.activity_window_start = time.time()
-        
-    def record_activity(self, tx_count: int):
-        """Record transaction activity"""
-        if tx_count > 0:
-            self.last_activity_time = time.time()
-            self.consecutive_empty_queries = 0
-            self.recent_tx_count += tx_count
-        else:
-            self.consecutive_empty_queries += 1
-            
-    def is_active_period(self) -> bool:
-        """Determine if we're in an active period"""
-        time_since_activity = time.time() - self.last_activity_time
-        return time_since_activity < 5.0  # Active if activity in last 5 seconds
-        
-    def get_optimal_poll_interval(self) -> float:
-        """Get optimal polling interval based on current state"""
-        if self.is_active_period():
-            return TIP_POLL_INTERVAL_FAST
-        elif self.consecutive_empty_queries > 5:
-            return TIP_POLL_INTERVAL_SLOW
-        else:
-            return TIP_POLL_INTERVAL_BASE
-            
-    def get_optimal_query_range(self) -> int:
-        """Get optimal query range based on activity"""
-        return TIP_QUERY_RANGE_ACTIVE if self.is_active_period() else TIP_QUERY_RANGE_INACTIVE
-        
-    def should_refresh_height(self) -> bool:
-        """Determine if height should be refreshed"""
-        time_since_refresh = time.time() - self.last_height_refresh
-        if self.consecutive_empty_queries >= GET_HEIGHT_REFRESH_ON_EMPTY_QUERIES:
-            return True
-        if self.is_active_period():
-            return time_since_refresh > GET_HEIGHT_REFRESH_FAST_INTERVAL
-        else:
-            return time_since_refresh > GET_HEIGHT_REFRESH_SLOW_INTERVAL
-            
-    def mark_height_refreshed(self):
-        """Mark that height was refreshed"""
-        self.last_height_refresh = time.time()
-
-
-async def poll_for_monad_transactions():
-    """OPTIMIZED polling function for Monad transactions"""
-    global PROCESSED_TX_HASHES, poller_start_block
-    
-    current_query_from_block = poller_start_block
-    polling_state = AdaptivePollingState()
-
-    if not hypersync_client:
-        print_general_red("BACKGROUND POLLER: Client not initialized.")
-        return
-
-    print_general_info("POLLER", f"Starting optimized polling from block {current_query_from_block}.")
-
-    query_obj = Query(
-        from_block=max(1, current_query_from_block),
-        to_block=None,
-        transactions=[TransactionSelection()],
-        field_selection=FieldSelection(
-            block=[BlockField.NUMBER, BlockField.TIMESTAMP, BlockField.HASH],
-            transaction=[
-                TransactionField.HASH, TransactionField.VALUE, TransactionField.BLOCK_NUMBER,
-                TransactionField.FROM, TransactionField.TO, TransactionField.GAS,
-                TransactionField.TRANSACTION_INDEX
-            ]
-        )
-    )
-
-    server_latest_known_block = current_query_from_block
-    loop_iteration_count = 0
-
-    while True:
-        loop_iteration_count += 1
-        try:
-            # OPTIMIZED HEIGHT REFRESH STRATEGY
-            if polling_state.should_refresh_height() or current_query_from_block > server_latest_known_block:
-                try:
-                    new_height = await hypersync_client.get_height()
-                    if new_height is not None and new_height != server_latest_known_block:
-                        print_poller_log("INFO", loop_iteration_count, 
-                                       f"Height updated: {server_latest_known_block} -> {new_height}")
-                        server_latest_known_block = new_height
-                        polling_state.mark_height_refreshed()
-                        
-                        # Realign if we've overshot significantly
-                        if current_query_from_block > server_latest_known_block + BLOCK_CATCH_UP_OFFSET:
-                            current_query_from_block = max(1, server_latest_known_block - BLOCK_CATCH_UP_OFFSET)
-                            print_poller_log("INFO", loop_iteration_count, 
-                                           f"Realigned query from block to {current_query_from_block}")
-                except Exception as e_gh:
-                    print_poller_log("WARNING", loop_iteration_count, f"Height refresh failed: {e_gh}")
-
-            query_obj.from_block = max(1, current_query_from_block)
-
-            # OPTIMIZED BATCH SIZE DETERMINATION
-            blocks_behind = max(0, server_latest_known_block - current_query_from_block)
-            is_catching_up = blocks_behind > BLOCK_CATCH_UP_OFFSET
-            
-            if is_catching_up:
-                # Catching up: use controlled batch size
-                query_obj.to_block = min(
-                    current_query_from_block + MAX_CATCH_UP_BATCH_SIZE - 1,
-                    server_latest_known_block
-                )
-                sleep_after_fetch = BACKLOG_POLL_INTERVAL_SECONDS
-            else:
-                # At tip: use adaptive range
-                query_range = polling_state.get_optimal_query_range()
-                query_obj.to_block = current_query_from_block + query_range - 1
-                sleep_after_fetch = polling_state.get_optimal_poll_interval()
-
-            # Execute query
-            response = await hypersync_client.get(query_obj)
-            
-            new_tx_count_this_iteration = 0
-            processed_up_to_block = current_query_from_block - 1
-
-            # OPTIMIZED RESPONSE PROCESSING
-            if response and response.data:
-                # Process blocks
-                if response.data.blocks:
-                    for b in response.data.blocks:
-                        b_num = getattr(b, 'number', None)
-                        if b_num is not None and b_num > processed_up_to_block:
-                            processed_up_to_block = b_num
-
-                # Process transactions with optimized queuing
-                if response.data.transactions:
-                    for tx in response.data.transactions:
-                        tx_hash = getattr(tx, 'hash', None)
-                        if tx_hash and tx_hash not in PROCESSED_TX_HASHES:
-                            # Memory management for processed hashes
-                            if len(PROCESSED_TX_HASHES) > MAX_PROCESSED_TX_HASHES:
-                                # Remove oldest 20% of hashes
-                                hashes_to_remove = list(PROCESSED_TX_HASHES)[:MAX_PROCESSED_TX_HASHES // 5]
-                                for old_hash in hashes_to_remove:
-                                    PROCESSED_TX_HASHES.discard(old_hash)
-                                    
-                            PROCESSED_TX_HASHES.add(tx_hash)
-                            tx_event_data = {
-                                "hash": tx_hash,
-                                "value": getattr(tx, 'value', '0x0'),
-                                "block_number": getattr(tx, 'block_number', 'N/A'),
-                                "from": getattr(tx, 'from_', 'N/A'),
-                                "to": getattr(tx, 'to', 'N/A'),
-                                "gas": getattr(tx, 'gas', 'N/A'),
-                                "transaction_index": getattr(tx, 'transaction_index', 0)
-                            }
-                            
-                            # OPTIMIZED QUEUE MANAGEMENT
-                            try:
-                                TRANSACTION_QUEUE.put_nowait(tx_event_data)
-                                new_tx_count_this_iteration += 1
-                            except asyncio.QueueFull:
-                                # If queue is full, skip this transaction (frontend can't keep up)
-                                print_poller_log("WARNING", loop_iteration_count, 
-                                               f"Queue full, skipping TX {tx_hash[:10]}")
-
-            # Update polling state
-            polling_state.record_activity(new_tx_count_this_iteration)
-            
-            if new_tx_count_this_iteration > 0:
-                print_poller_log("INFO", loop_iteration_count, 
-                               f"Queued {new_tx_count_this_iteration} new TXs. Queue size: {TRANSACTION_QUEUE.qsize()}")
-
-            # OPTIMIZED ADVANCEMENT LOGIC
-            if response and hasattr(response, 'next_block') and response.next_block:
-                current_query_from_block = response.next_block
-                if hasattr(response, 'archive_height') and response.archive_height:
-                    if response.archive_height > server_latest_known_block:
-                        server_latest_known_block = response.archive_height
-            elif processed_up_to_block >= query_obj.from_block:
-                # We processed blocks, advance from the highest block processed
-                current_query_from_block = processed_up_to_block + 1
-            else:
-                # No data or progress, advance conservatively
-                if is_catching_up:
-                    # When catching up, stay aggressive
-                    current_query_from_block = query_obj.from_block + 1
-                else:
-                    # At tip with no data, check if we should wait or advance
-                    if polling_state.consecutive_empty_queries > 3:
-                        # Multiple empty queries, stay at current block
-                        current_query_from_block = max(current_query_from_block, 
-                                                     server_latest_known_block - BLOCK_CATCH_UP_OFFSET + 1)
-                    else:
-                        # Advance by 1
-                        current_query_from_block = query_obj.from_block + 1
-
-            current_query_from_block = max(1, current_query_from_block)
-            await asyncio.sleep(sleep_after_fetch)
-
-        except KeyboardInterrupt:
-            print_general_yellow("\nBACKGROUND POLLER: Stopping.")
-            break
-        except Exception as e:
-            print_poller_log("ERROR", loop_iteration_count, f"Unhandled exception: {type(e).__name__}: {e}")
-            traceback.print_exc(file=sys.stderr)
-            await asyncio.sleep(ERROR_RETRY_DELAY_SECONDS)
-
-
-# --- FastAPI app, lifespan, SSE generator, routes ---
-app = FastAPI(title="Monad Live Transaction Visualizer - OPTIMIZED")
-
-static_dir_path = os.path.join(os.path.dirname(__file__), "static")
-if os.path.isdir(static_dir_path):
-    app.mount("/static", StaticFiles(directory=static_dir_path), name="static")
-else:
-    try:
-        os.makedirs(static_dir_path, exist_ok=True)
-        app.mount("/static", StaticFiles(directory=static_dir_path), name="static")
-    except Exception as e_mkdir:
-        print_general_yellow(f"Could not create/mount 'static' directory: {e_mkdir}.")
-
+# --- Global State & Application Lifespan ---
+app_state: Dict[str, Any] = {"hypersync_client": None, "derby_connections": set()}
 
 @asynccontextmanager
-async def lifespan(app_instance: FastAPI):
-    print_general_info("SYSTEM", "FastAPI application starting up...")
-    global hypersync_client, poller_start_block
+async def lifespan(app: FastAPI):
+    print_info("SYSTEM", "Application starting up...")
     bearer_token = os.environ.get("HYPERSYNC_BEARER_TOKEN")
     if not bearer_token:
-        print_general_red("STARTUP: HYPERSYNC_BEARER_TOKEN not found.")
-        hypersync_client = None; yield
-        print_general_info("SYSTEM","FastAPI application shutting down (no client)."); return
+        print_red("STARTUP: HYPERSYNC_BEARER_TOKEN environment variable not found.")
+        sys.exit(1)
     try:
         client_config = ClientConfig(url=MONAD_HYPERSYNC_URL, bearer_token=bearer_token)
-        hypersync_client = hypersync.HypersyncClient(client_config)
-        print_general_info("STARTUP", f"HypersyncClient initialized for {MONAD_HYPERSYNC_URL}.")
-        temp_initial_height = 0
-        try:
-            fetched_height = await hypersync_client.get_height()
-            if fetched_height is not None:
-                temp_initial_height = max(0, fetched_height - BLOCK_CATCH_UP_OFFSET)
-                print_general_info("STARTUP", f"Current chain height fetched: {fetched_height}")
-            else:
-                print_general_yellow("STARTUP: Could not fetch initial height from Hypersync.")
-        except Exception as e_gh:
-            print_general_yellow(f"STARTUP: Error fetching initial height: {e_gh}. Defaulting...")
+        app_state["hypersync_client"] = hypersync.HypersyncClient(client_config)
+        print_info("SYSTEM", "HypersyncClient initialized.")
+        yield
+    finally:
+        if app_state["hypersync_client"]:
+            print_info("SYSTEM", "Closing HypersyncClient.")
+        print_info("SYSTEM", "Application shutdown complete.")
 
-        poller_start_block = max(1, temp_initial_height)
-        print_general_info("STARTUP", f"Poller will start from block {poller_start_block}.")
-        app_instance.state.poller_task = asyncio.create_task(poll_for_monad_transactions())
-        print_general_info("STARTUP", "Optimized Monad transaction poller task started.")
-    except Exception as e:
-        print_general_red(f"STARTUP: Failed to initialize Hypersync client or start poller: {e}")
-        traceback.print_exc(file=sys.stderr); hypersync_client = None
-    yield
-    if hasattr(app_instance.state, 'poller_task') and app_instance.state.poller_task:
-        print_general_info("SHUTDOWN", "Cancelling poller task...")
-        app_instance.state.poller_task.cancel()
-        try: await app_instance.state.poller_task
-        except asyncio.CancelledError: print_general_info("SHUTDOWN","Poller task successfully cancelled.")
-        except Exception as e_shutdown: print_general_red(f"SHUTDOWN: Error during poller task: {e_shutdown}")
-    print_general_info("SHUTDOWN","FastAPI application shutdown complete.")
+app = FastAPI(lifespan=lifespan)
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
-app.router.lifespan_context = lifespan
+# --- Helper Print Functions ---
+def print_red(msg, file=sys.stderr): print(f"\033[91mERROR: {msg}\033[0m", file=file, flush=True)
+def print_yellow(msg, file=sys.stderr): print(f"\033[93mWARNING: {msg}\033[0m", file=file, flush=True)
+def print_green(msg, file=sys.stdout): print(f"\033[92m{msg}\033[0m", file=file, flush=True)
+def print_cyan(msg, file=sys.stdout): print(f"\033[96m{msg}\033[0m", file=file, flush=True)
+def print_info(msg_prefix, message, file=sys.stderr): print(f"{msg_prefix.upper()} INFO: {message}", file=file, flush=True)
 
+# ==========================================================
+# === Generator 1: Cityscape Firehose Stream (TPS LOGIC FIXED)
+# ==========================================================
+async def cityscape_stream_generator(request: Request) -> AsyncGenerator[str, None]:
+    hypersync_client = app_state["hypersync_client"]
+    query = Query(
+        from_block=0, # This will be set dynamically in the loop
+        transactions=[TransactionSelection()],
+        field_selection=FieldSelection(
+            transaction=[TransactionField.HASH, TransactionField.VALUE, TransactionField.BLOCK_NUMBER, TransactionField.GAS_USED, TransactionField.GAS_PRICE],
+            block=[BlockField.NUMBER, BlockField.TIMESTAMP]
+        )
+    )
+    
+    print_info("CITYSCAPE", "Starting stream with dynamic TPS calculation.")
 
-async def sse_transaction_generator(request: Request):
-    """OPTIMIZED SSE generator with improved batching"""
     while True:
-        if await request.is_disconnected():
-            break
-        batch_to_send = []
-        first_item_received_time = None
         try:
-            first_tx_data = await asyncio.wait_for(TRANSACTION_QUEUE.get(), timeout=SSE_KEEP_ALIVE_TIMEOUT)
-            batch_to_send.append(first_tx_data)
-            TRANSACTION_QUEUE.task_done()
-            first_item_received_time = time.monotonic()
+            if await request.is_disconnected():
+                print_yellow("Cityscape client disconnected."); break
             
-            # Collect additional transactions more aggressively
-            while len(batch_to_send) < SSE_BATCH_MAX_SIZE:
-                time_elapsed = time.monotonic() - first_item_received_time
-                if time_elapsed > SSE_BATCH_MAX_WAIT_SECONDS:
-                    break
-                try:
-                    tx_data = TRANSACTION_QUEUE.get_nowait()
-                    batch_to_send.append(tx_data)
-                    TRANSACTION_QUEUE.task_done()
-                except asyncio.QueueEmpty:
-                    # Brief wait to see if more transactions arrive quickly
-                    await asyncio.sleep(0.001)
-                    try:
-                        tx_data = TRANSACTION_QUEUE.get_nowait()
-                        batch_to_send.append(tx_data)
-                        TRANSACTION_QUEUE.task_done()
-                    except asyncio.QueueEmpty:
-                        break
-                        
-            if batch_to_send:
-                sse_event = f"event: {SSE_EVENT_NAME}\ndata: {json.dumps(batch_to_send)}\n\n"
-                yield sse_event
-        except asyncio.TimeoutError:
-            yield ": keep-alive\n\n"
+            # Dynamically set the block range for the query to get the last ~5 seconds of blocks
+            current_height = await hypersync_client.get_height()
+            # Assuming ~0.5s block times, 10 blocks is ~5 seconds.
+            query.from_block = max(0, current_height - 10)
+            query.to_block = current_height + 1 # +1 to make it inclusive
+
+            response = await hypersync_client.get(query)
+            
+            tps = 0.0 # Default value
+            if response.data and response.data.transactions and response.data.blocks and len(response.data.blocks) > 1:
+                # --- NEW DYNAMIC TPS CALCULATION LOGIC ---
+                total_transactions = len(response.data.transactions)
+                
+                # Get the timestamps of the first and last block in the batch
+                timestamps = [int(b.timestamp, 16) for b in response.data.blocks if b.timestamp]
+                min_ts = min(timestamps)
+                max_ts = max(timestamps)
+                
+                # Calculate the actual time duration of the batch
+                duration = max_ts - min_ts
+
+                # Calculate TPS, avoiding division by zero
+                if duration > 0:
+                    tps = total_transactions / duration
+                else:
+                    # If all transactions happened in the same second, we can't get a rate,
+                    # so we just show the count as the "rate" for that one second.
+                    tps = total_transactions
+
+                print_info("TPS_CALC", f"Batch TXs: {total_transactions}, Duration: {duration}s, Dynamic TPS: {tps:.2f}")
+
+                # --- PAYLOAD PREPARATION (UNCHANGED) ---
+                transactions_payload = [{"hash": tx.hash, "value": f"{(int(tx.value, 16) / 1e18):.4f}"} for tx in response.data.transactions]
+                latest_block = max(response.data.blocks, key=lambda b: b.number)
+                total_fees = sum((int(tx.gas_used, 16) * int(tx.gas_price, 16)) / 1e18 for tx in response.data.transactions if tx.gas_used and tx.gas_price)
+                
+                sse_payload = {
+                    "transactions": transactions_payload,
+                    "latest_block": {"number": latest_block.number, "timestamp": int(latest_block.timestamp, 16)},
+                    "tps": tps, # Using the new dynamically calculated TPS
+                    "total_fees_in_batch": total_fees
+                }
+                yield f"data: {json.dumps(sse_payload)}\n\n"
+
+            # Sleep for the 5-second polling interval
+            await asyncio.sleep(CITYSCAPE_POLLING_INTERVAL)
+
         except Exception as e:
-            print_general_red(f"SSE ERROR: {type(e).__name__} - {e}")
-            await asyncio.sleep(1)
+            print_red(f"CITYSCAPE ERROR: {e}"); await asyncio.sleep(ERROR_RETRY_DELAY_SECONDS)
 
+# ==========================================================
+# === Generator 2: Derby Tracker Stream (UNCHANGED)
+# ==========================================================
+async def derby_stream_generator(request: Request) -> AsyncGenerator[str, None]:
+    hypersync_client = app_state["hypersync_client"]
+    
+    # Register this connection
+    connection_id = id(request)
+    app_state["derby_connections"].add(connection_id)
+    
+    last_config_check = 0
+    CONFIG_CHECK_INTERVAL = 10  # Check for config changes every 10 seconds
+    
+    try:
+        while True:
+            # Periodically refresh the configuration
+            current_time = time.time()
+            if current_time - last_config_check > CONFIG_CHECK_INTERVAL:
+                current_config = DERBY_TRACKER_CONFIG.copy()
+                last_config_check = current_time
+                print_info("DERBY", f"Refreshed config. Now tracking: {list(current_config.keys())}")
+            else:
+                # Use the existing config for this iteration
+                if 'current_config' not in locals():
+                    current_config = DERBY_TRACKER_CONFIG.copy()
+            
+            all_addresses = [addr for entity_addrs in current_config.values() for addr in entity_addrs]
+            address_to_dex = {addr.lower(): name for name, addrs in current_config.items() for addr in addrs}
+            
+            # No need for persistent timestamp tracking - we calculate TPS from each batch
 
-@app.get("/transaction-stream")
-async def transaction_stream(request: Request):
-    if hypersync_client is None:
-        return HTMLResponse("Backend Hypersync client not initialized. Check server logs.", status_code=503)
-    sse_headers = {
-        "Cache-Control": "no-cache", "Connection": "keep-alive", "Access-Control-Allow-Origin": "*",
-    }
-    return StreamingResponse(sse_transaction_generator(request), media_type="text/event-stream", headers=sse_headers)
+            if not all_addresses:
+                print_yellow("DERBY WARNING: No addresses to track. Stream will yield empty updates.")
+                if await request.is_disconnected(): 
+                    break
+                yield f"data: {json.dumps({})}\\n\\n"
+                await asyncio.sleep(DERBY_POLLING_INTERVAL)
+                continue
 
+            try:
+                current_height = await hypersync_client.get_height()
+                # Use a smaller window to avoid double-counting transactions
+                # Get only the last ~4 seconds of blocks (about 8 blocks at 0.5s per block)
+                start_block = max(0, current_height - 8)
+            except Exception as e:
+                print_red(f"DERBY ERROR: Failed to get initial block height: {e}")
+                await asyncio.sleep(ERROR_RETRY_DELAY_SECONDS)
+                continue
 
-@app.get("/", response_class=FileResponse)
-async def read_index():
-    html_file_name = "index.html"
-    html_file_path = os.path.join(os.path.dirname(__file__), "static", html_file_name)
+            query = Query(
+                from_block=start_block,
+                to_block=current_height + 1,  # Make it inclusive
+                transactions=[TransactionSelection(to=all_addresses)],
+                field_selection=FieldSelection(
+                    block=[BlockField.NUMBER, BlockField.TIMESTAMP],
+                    transaction=[TransactionField.TO, TransactionField.BLOCK_NUMBER]
+                )
+            )
 
-    if not os.path.exists(html_file_path):
-        return HTMLResponse(content=f"<html><body><h1>Error 404: {html_file_name} not found in static folder.</h1><p>Please ensure 'static/{html_file_name}' exists.</p></body></html>", status_code=404)
-    return FileResponse(html_file_path)
+            try:
+                if await request.is_disconnected():
+                    print_yellow("Derby client disconnected."); break
+                
+                response = await hypersync_client.get(query)
+                
+                payload = {}
+                # Initialize all entities with 0 TPS
+                for dex_name in current_config.keys():
+                    payload[dex_name] = {"tps": 0.0}
+                
+                if response.data and response.data.transactions and response.data.blocks:
+                    # Count transactions in this specific batch for each DEX
+                    current_batch_counts = {}
+                    for dex_name in current_config.keys():
+                        current_batch_counts[dex_name] = 0
+                    
+                    block_timestamp_map = {b.number: int(b.timestamp, 16) for b in response.data.blocks if b.number and b.timestamp}
+                    
+                    # Count transactions to each DEX in this batch
+                    for tx in response.data.transactions:
+                        if tx.to and tx.block_number in block_timestamp_map:
+                            dex_name = address_to_dex.get(tx.to.lower())
+                            if dex_name:
+                                current_batch_counts[dex_name] += 1
+                    
+                    # Calculate time span of this batch
+                    if response.data.blocks and len(response.data.blocks) > 0:
+                        timestamps = [int(b.timestamp, 16) for b in response.data.blocks if b.timestamp]
+                        if len(timestamps) > 1:
+                            time_span = max(timestamps) - min(timestamps)
+                            if time_span > 0:
+                                # Calculate TPS for this batch: transactions / time_span
+                                for dex_name in current_config.keys():
+                                    tx_count = current_batch_counts[dex_name]
+                                    tps = tx_count / time_span
+                                    payload[dex_name] = {"tps": tps}
+                            else:
+                                # All transactions in same second, use count as rate
+                                for dex_name in current_config.keys():
+                                    payload[dex_name] = {"tps": float(current_batch_counts[dex_name])}
+                        else:
+                            # Single block, use transaction count as approximation
+                            for dex_name in current_config.keys():
+                                payload[dex_name] = {"tps": float(current_batch_counts[dex_name])}
+                
+                # This will print the report for the entities in this specific connection
+                print_derby_update(payload, list(current_config.keys()))
+                yield f"data: {json.dumps(payload)}\n\n"
 
+                # Don't use response.next_block - always query recent blocks
+                
+                await asyncio.sleep(DERBY_POLLING_INTERVAL)
+            except Exception as e:
+                print_red(f"DERBY ERROR: {e}"); await asyncio.sleep(ERROR_RETRY_DELAY_SECONDS)
+    finally:
+        app_state["derby_connections"].discard(connection_id)
 
+def print_derby_update(payload: dict, entity_names: List[str]):
+    report = "\n" + "="*60 + "\n--- PERPETUAL MONAD DERBY (Live Terminal View) ---\n"
+    total_tps = 0
+    # Sort by the provided entity names to maintain order
+    for dex_name in sorted(entity_names):
+        data = payload.get(dex_name, {"tps": 0})
+        tps = data["tps"]
+        report += f"{dex_name:<20}: {tps:.2f} TPS\n"; total_tps += tps
+    report += "-"*60 + f"\n{'TOTAL':<20}: {total_tps:.2f} TPS\n" + "="*60
+    print_green(report)
+
+# ==========================================================
+# === FastAPI Endpoints
+# ==========================================================
+@app.post("/update-derby-config")
+async def update_derby_config(config_request: UpdateDerbyConfigRequest):
+    global DERBY_TRACKER_CONFIG
+    
+    new_config = {entity.name: entity.addresses for entity in config_request.entities}
+    
+    if not new_config:
+        print_yellow("DERBY_CONFIG: Received empty config. Resetting to default DEX contracts.")
+        DERBY_TRACKER_CONFIG = {name: [address] for name, address in DEX_CONTRACTS.items()}
+    else:
+        DERBY_TRACKER_CONFIG = new_config
+
+    print_info("DERBY_CONFIG", f"Updated Derby tracker config. Now tracking {len(DERBY_TRACKER_CONFIG)} entities.")
+    # You might want to add validation for addresses here in a real application
+    print_cyan(json.dumps(DERBY_TRACKER_CONFIG, indent=2))
+
+    return {"status": "success", "message": "Derby configuration updated."}
+
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy", "service": "monad-visualizer"}
+
+@app.get("/firehose-stream")
+async def firehose_stream_endpoint(request: Request):
+    return StreamingResponse(cityscape_stream_generator(request), media_type="text/event-stream")
+
+@app.get("/derby-stream")
+async def derby_stream_endpoint(request: Request):
+    return StreamingResponse(derby_stream_generator(request), media_type="text/event-stream")
+
+app.mount("/", StaticFiles(directory="static", html=True), name="static")
+
+# ==========================================================
+# === Main Runner (UNCHANGED)
+# ==========================================================
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8000))
-    module_name = os.path.splitext(os.path.basename(__file__))[0]
-    print_general_info("SYSTEM", f"Will run Uvicorn on http://127.0.0.1:{port} for {module_name}:app")
-    uvicorn.run(f"{module_name}:app", host="0.0.0.0", port=port, reload=True)
+    print_info("SYSTEM", f"Starting Uvicorn server on http://{HOST}:{PORT}")
+    uvicorn.run(app, host=HOST, port=PORT, log_level="info")

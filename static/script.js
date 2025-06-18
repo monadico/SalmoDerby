@@ -158,10 +158,10 @@ class MonadVisualizer {
 
   // Helper function to determine transaction size from value
   getTransactionType(value) {
-      const ethValue = parseFloat(value);
-      if (ethValue > 100) return 'supernova';
-      if (ethValue > 10) return 'large';
-      if (ethValue > 1) return 'medium';
+      const monValue = parseFloat(value);
+      if (monValue > 1000) return 'supernova';
+      if (monValue > 100) return 'large';
+      if (monValue > 20) return 'medium';
       return 'small';
   }
 
@@ -184,7 +184,7 @@ class MonadVisualizer {
 
     const timestamp = new Date(transaction.timestamp).toLocaleTimeString();
     const value = transaction.value.toFixed(2);
-    feedItem.innerHTML = `<span class="timestamp">${timestamp}</span><span class="action">${transaction.type.toUpperCase()}</span><span class="details">${value} ETH</span>`;
+    feedItem.innerHTML = `<span class="timestamp">${timestamp}</span><span class="action">${transaction.type.toUpperCase()}</span><span class="details">${value} MON</span>`;
     
     feed.insertBefore(feedItem, feed.firstChild);
 

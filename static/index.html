@@ -4,10 +4,12 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Monad Super-Visualizer</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <!-- Background Elements -->
     <div class="background-gradient"></div>
     <div class="background-shapes">
         <div class="shape shape-1"></div>
@@ -15,9 +17,7 @@
         <div class="shape shape-3"></div>
     </div>
 
-    <!-- Main Container -->
     <div class="app-container">
-        <!-- Header -->
         <header class="header glass-panel">
             <div class="logo">
                 <div class="logo-icon">M</div>
@@ -26,65 +26,76 @@
             <nav class="nav-tabs">
                 <button class="tab-button active" data-tab="cityscape">
                     <span class="tab-icon">✨</span>
-                    Cityscape Firehose
+                    <span>Data Stream</span>
                 </button>
                 <button class="tab-button" data-tab="derby">
                     <span class="tab-icon">🏁</span>
-                    Perpetual Derby
+                    <span>Perpetual Derby</span>
                 </button>
                 <button class="tab-button" data-tab="dashboard">
                     <span class="tab-icon">📊</span>
-                    Dashboard
+                    <span>Dashboard</span>
                 </button>
             </nav>
         </header>
 
-        <!-- Page Content -->
         <main class="main-content">
-            <!-- Page 1: Cityscape Firehose -->
             <div id="cityscape" class="page active">
-                <div class="cityscape-container">
-                    <div class="cityscape-background"></div>
-                    <div class="stars-container" id="starsContainer"></div>
-                    <div class="monanimal-container" id="monanimalsContainer"></div>
-                    <div class="stats-overlay glass-panel">
-                        <div class="stat">
-                            <span class="stat-label">Live TPS</span>
-                            <span class="stat-value" id="liveTps">0</span>
+                <div class="main-layout">
+                    <div class="visualization-area">
+                        <div class="data-stream-container">
+                            <div class="transaction-container">
+                                <div class="grid-lines"></div>
+                                <div class="overlay"></div>
+                            </div>
                         </div>
-                        <div class="stat">
-                            <span class="stat-label">Total Transactions</span>
-                            <span class="stat-value" id="totalTx">0</span>
+                    </div>
+                    <aside class="data-stream-sidebar">
+                        <div class="data-feed glass-panel">
+                            <div class="feed-header">
+                                <span>Data Stream</span>
+                                <span class="live-indicator">LIVE</span>
+                            </div>
+                            <div class="feed-content" id="dataFeed"></div>
+                        </div>
+                    </aside>
+                    <div class="live-stats-bar">
+                        <div class="stat-block tps-block">
+                            <div class="stat-label">Live TPS</div>
+                            <div class="stat-value" id="liveTpsValue">0</div>
+                            <div class="tps-gauge">
+                                <div class="tps-gauge-inner" id="tpsGaugeInner"></div>
+                            </div>
+                        </div>
+                        <div class="stat-separator"></div>
+                        <div class="stat-block">
+                            <div class="stat-label">Current Block</div>
+                            <div class="stat-value" id="blockNumberValue">0</div>
+                        </div>
+                        <div class="stat-separator"></div>
+                        <div class="stat-block">
+                            <div class="stat-label">Tx Fees Spent (ETH)</div>
+                            <div class="stat-value" id="txFeesValue">0.0000</div>
                         </div>
                     </div>
                 </div>
             </div>
 
-            <!-- Page 2: Perpetual Monad Derby -->
             <div id="derby" class="page">
                 <div class="derby-container">
-                    <!-- Scoreboard -->
                     <div class="scoreboard glass-panel">
                         <div class="scoreboard-header">
                             <h2>Race Leaderboard</h2>
-                            <button class="config-button" id="configButton">
-                                ⚙️ Configure Race
-                            </button>
+                            <button class="config-button" id="configButton">⚙️ Configure Race</button>
                         </div>
-                        <div class="scoreboard-content" id="scoreboardContent">
-                            <!-- Dynamic content -->
-                        </div>
+                        <div class="scoreboard-content" id="scoreboardContent"></div>
                     </div>
 
-                    <!-- Racetrack -->
-                    <div class="racetrack-container">
-                        <div class="racetrack" id="racetrack">
-                            <!-- Dynamic lanes -->
-                        </div>
+                    <div class="racetrack-container glass-panel">
+                        <div class="racetrack" id="racetrack"></div>
                     </div>
                 </div>
 
-                <!-- Configuration Modal -->
                 <div class="modal-overlay" id="configModal">
                     <div class="modal glass-panel">
                         <div class="modal-header">
@@ -93,13 +104,46 @@
                         </div>
                         <div class="modal-content">
                             <div class="config-section">
-                                <label>Select Entities to Race:</label>
-                                <div class="entity-checkboxes" id="entityCheckboxes">
-                                    <!-- Dynamic checkboxes -->
+                                <label>Entity Configuration:</label>
+                                <div class="input-row">
+                                    <div class="input-group">
+                                        <label for="entityName">Entity Name</label>
+                                        <input type="text" id="entityName" placeholder="e.g., Uniswap V3" class="glass-input">
+                                    </div>
+                                    <div class="input-group">
+                                        <label for="entityAddresses">Blockchain Address(es)</label>
+                                        <input type="text" id="entityAddresses" placeholder="0x1f9840a85d5af5bf1d1762f925bdaddc4201f984, 0x..." class="glass-input">
+                                    </div>
                                 </div>
+                                <div class="monitoring-options">
+                                    <label>Monitoring Direction:</label>
+                                    <div class="radio-group">
+                                        <div class="radio-item">
+                                            <input type="radio" id="toAddress" name="monitoring" value="to" checked>
+                                            <label for="toAddress">To the specified address(es)</label>
+                                        </div>
+                                        <div class="radio-item">
+                                            <input type="radio" id="fromAddress" name="monitoring" value="from">
+                                            <label for="fromAddress">From the specified address(es)</label>
+                                        </div>
+                                        <div class="radio-item">
+                                            <input type="radio" id="bothDirections" name="monitoring" value="both">
+                                            <label for="bothDirections">Both directions</label>
+                                        </div>
+                                        <div class="radio-item">
+                                            <input type="radio" id="contractDeployed" name="monitoring" value="deployed">
+                                            <label for="contractDeployed">All transactions to contracts deployed by the specified address</label>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="config-section">
+                                <label>Current Racing Entities:</label>
+                                <div class="current-entities" id="currentEntities"></div>
                             </div>
                             <div class="config-actions">
                                 <button class="btn-secondary" id="resetConfig">Reset to Default</button>
+                                <button class="btn-primary" id="addEntity">Add Entity</button>
                                 <button class="btn-primary" id="applyConfig">Apply Configuration</button>
                             </div>
                         </div>
@@ -107,7 +151,6 @@
                 </div>
             </div>
 
-            <!-- Page 3: Dashboard -->
             <div id="dashboard" class="page">
                 <div class="dashboard-container">
                     <div class="placeholder-panel glass-panel">

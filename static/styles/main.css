@@ -1,0 +1,231 @@
+/* CSS Custom Properties */
+:root {
+  /* Monad Brand Colors */
+  --monad-purple: #836ef9;
+  --monad-blue: #200052;
+  --monad-off-white: #fbfaf9;
+  --monad-white: #ffffff;
+  --monad-black: #0e100f;
+
+  /* Advanced Glass Variables */
+  --glass-bg-primary: rgba(131, 110, 249, 0.08);
+  --glass-bg-secondary: rgba(251, 250, 249, 0.04);
+  --glass-border-primary: rgba(251, 250, 249, 0.15);
+  --glass-border-secondary: rgba(131, 110, 249, 0.2);
+  --glass-shadow-primary: 0 8px 32px rgba(0, 0, 0, 0.3);
+  --glass-shadow-secondary: 0 4px 16px rgba(131, 110, 249, 0.2);
+  --glass-blur-primary: 20px;
+  --glass-blur-secondary: 12px;
+
+  /* Typography */
+  --font-primary: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-weight-light: 300;
+  --font-weight-normal: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+
+  /* Spacing */
+  --spacing-xs: 0.25rem;
+  --spacing-sm: 0.5rem;
+  --spacing-md: 1rem;
+  --spacing-lg: 1.5rem;
+  --spacing-xl: 2rem;
+  --spacing-2xl: 3rem;
+
+  /* Border Radius */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
+  --radius-2xl: 24px;
+  --radius-full: 50%;
+
+  /* Transitions */
+  --transition-fast: 0.15s ease-out;
+  --transition-normal: 0.3s ease-out;
+  --transition-slow: 0.5s ease-out;
+  --transition-glass: 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+
+/* Reset and Base Styles */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  font-size: 16px;
+  scroll-behavior: smooth;
+}
+
+body {
+  font-family: var(--font-primary);
+  font-weight: var(--font-weight-normal);
+  line-height: 1.6;
+  color: var(--monad-off-white);
+  background: var(--monad-black);
+  overflow-x: hidden;
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+/* SVG Filters */
+.svg-filters {
+  position: absolute;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+  z-index: -1000;
+}
+
+/* Particle Canvas */
+.particle-canvas {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: -100;
+  opacity: 0.6;
+}
+
+/* App Container */
+.app-container {
+  position: relative;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  z-index: 1;
+}
+
+/* Main Content */
+.main-content {
+  flex: 1;
+  padding: 0 var(--spacing-md) var(--spacing-md);
+  position: relative;
+}
+
+/* Page Transitions */
+.page {
+  display: none;
+  height: calc(100vh - 140px);
+  opacity: 0;
+  transform: translateY(20px);
+  transition: all var(--transition-slow);
+}
+
+.page.active {
+  display: block;
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* Typography */
+.section-title {
+  font-size: 1.5rem;
+  font-weight: var(--font-weight-semibold);
+  color: var(--monad-off-white);
+  margin: 0;
+}
+
+.section-label {
+  display: block;
+  font-size: 0.9rem;
+  font-weight: var(--font-weight-medium);
+  color: var(--monad-off-white);
+  margin-bottom: var(--spacing-md);
+}
+
+.input-label {
+  font-size: 0.85rem;
+  font-weight: var(--font-weight-medium);
+  color: var(--monad-off-white);
+  margin-bottom: var(--spacing-sm);
+  opacity: 0.9;
+}
+
+/* Utility Classes */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Performance Optimizations */
+.gpu-accelerated {
+  transform: translateZ(0);
+  will-change: transform;
+}
+
+.no-select {
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  user-select: none;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+  :root {
+    --spacing-md: 0.75rem;
+    --spacing-lg: 1rem;
+    --spacing-xl: 1.5rem;
+  }
+
+  .main-content {
+    padding: 0 var(--spacing-sm) var(--spacing-sm);
+  }
+
+  .page {
+    height: calc(100vh - 120px);
+  }
+}
+
+@media (max-width: 480px) {
+  html {
+    font-size: 14px;
+  }
+
+  .main-content {
+    padding: 0 var(--spacing-xs) var(--spacing-xs);
+  }
+}
+
+/* Reduced Motion Support */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+
+  .page {
+    transition: none;
+  }
+}
+
+/* High Contrast Mode */
+@media (prefers-contrast: high) {
+  :root {
+    --glass-bg-primary: rgba(131, 110, 249, 0.2);
+    --glass-border-primary: rgba(251, 250, 249, 0.4);
+  }
+}

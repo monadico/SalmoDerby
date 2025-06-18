@@ -1,0 +1,55 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Documentation
+*.md
+!README.md
+
+# Development files
+dev.py
+test*.py
+ultimo_funcional.py
+teste.py
+backend_test.py
+
+# Supervisor
+supervisor.conf
+supervisord.pid
+
+# Build artifacts
+target/
+.cargo/
+Cargo.lock.bak 

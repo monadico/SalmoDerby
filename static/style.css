@@ -379,19 +379,246 @@ body {
 .scoreboard-header h2 { font-size: 1.5rem; font-weight: 600; }
 .config-button { background: var(--monad-purple); border: none; border-radius: 8px; padding: 0.5rem 1rem; color: var(--monad-white); cursor: pointer; font-size: 0.9rem; transition: all 0.3s ease; }
 .config-button:hover { background: var(--monad-blue); transform: translateY(-2px); }
-.scoreboard-content { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1rem; }
-.racer-card { background: rgba(131, 110, 249, 0.1); border: 1px solid var(--glass-border); border-radius: 12px; padding: 1rem; transition: all 0.3s ease; }
-.racer-card:hover { background: rgba(131, 110, 249, 0.2); transform: translateY(-2px); }
-.racer-name { font-weight: 600; margin-bottom: 0.5rem; color: var(--monad-purple); }
-.racer-stats { display: flex; justify-content: space-between; font-size: 0.9rem; opacity: 0.8; }
+.scoreboard-content { display: flex; flex-direction: column; gap: 0.75rem; }
+.scoreboard-item { 
+  background: rgba(131, 110, 249, 0.1); 
+  border: 1px solid var(--glass-border); 
+  border-radius: 12px; 
+  padding: 1rem; 
+  transition: all 0.3s ease;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+.scoreboard-item:hover { background: rgba(131, 110, 249, 0.2); transform: translateY(-2px); }
+.scoreboard-item .rank {
+  font-size: 1.2rem;
+  font-weight: bold;
+  color: var(--monad-purple);
+  min-width: 30px;
+  text-align: center;
+}
+.scoreboard-item .racer-name { 
+  font-weight: 600; 
+  color: var(--monad-off-white);
+  flex: 1;
+  min-width: 120px;
+}
+.scoreboard-item .racer-stats { 
+  display: flex; 
+  gap: 1rem; 
+  font-size: 0.9rem; 
+  align-items: center;
+}
+.scoreboard-item .racer-tps { 
+  color: var(--monad-purple);
+  font-weight: 600;
+  min-width: 80px;
+}
+.scoreboard-item .racer-wins { 
+  color: #ffd700;
+  font-weight: 600;
+  min-width: 50px;
+}
+.scoreboard-item .racer-progress { 
+  color: rgba(251, 250, 249, 0.8);
+  font-size: 0.8rem;
+  min-width: 50px;
+}
 .racetrack-container { flex: 1; padding: 2rem; overflow: hidden; }
-.racetrack { height: 100%; display: flex; flex-direction: column; gap: 1rem; }
-.race-lane { position: relative; height: 60px; background: rgba(32, 0, 82, 0.3); border-radius: 30px; border: 2px solid var(--glass-border); overflow: hidden; }
-.lane-background { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: repeating-linear-gradient( 90deg, transparent 0px, transparent 40px, rgba(251, 250, 249, 0.1) 40px, rgba(251, 250, 249, 0.1) 42px ); }
-.racer { position: absolute; top: 50%; left: 0; width: 40px; height: 40px; transform: translateY(-50%); background: linear-gradient(45deg, var(--monad-purple), var(--monad-blue)); border-radius: 50% 50% 50% 50% / 60% 60% 40% 40%; transition: left 0.5s ease-out; z-index: 2; }
-.racer::before { content: ""; position: absolute; top: 8px; left: 8px; width: 6px; height: 6px; background: var(--monad-white); border-radius: 50%; }
-.racer::after { content: ""; position: absolute; top: 8px; right: 8px; width: 6px; height: 6px; background: var(--monad-white); border-radius: 50%; }
-.lane-label { position: absolute; left: 1rem; top: 50%; transform: translateY(-50%); font-size: 0.8rem; font-weight: 600; color: var(--monad-off-white); z-index: 1; }
+.racetrack { 
+  height: 100%; 
+  position: relative;
+  background: linear-gradient(90deg, 
+    rgba(32, 0, 82, 0.4) 0%, 
+    rgba(32, 0, 82, 0.2) 50%, 
+    rgba(32, 0, 82, 0.4) 100%
+  );
+  border-radius: 20px;
+  border: 2px solid var(--glass-border);
+  backdrop-filter: blur(10px);
+  overflow: hidden;
+}
+
+/* Futuristic Racing Lanes */
+.racing-lane {
+  position: absolute;
+  left: 0;
+  width: 100%;
+  background: linear-gradient(90deg,
+    rgba(131, 110, 249, 0.1) 0%,
+    rgba(131, 110, 249, 0.05) 50%,
+    rgba(131, 110, 249, 0.1) 100%
+  );
+  border-top: 1px solid rgba(131, 110, 249, 0.3);
+  border-bottom: 1px solid rgba(131, 110, 249, 0.3);
+  box-shadow: 
+    inset 0 1px 0 rgba(251, 250, 249, 0.1),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.2);
+}
+
+.racing-lane::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: repeating-linear-gradient(
+    90deg,
+    transparent 0px,
+    transparent 30px,
+    rgba(131, 110, 249, 0.2) 30px,
+    rgba(131, 110, 249, 0.2) 35px,
+    transparent 35px,
+    transparent 65px
+  );
+  animation: trackFlow 3s linear infinite;
+}
+
+.racing-lane::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 100%;
+  height: 2px;
+  background: linear-gradient(90deg,
+    transparent 0%,
+    rgba(131, 110, 249, 0.6) 50%,
+    transparent 100%
+  );
+  transform: translateY(-50%);
+  box-shadow: 0 0 10px rgba(131, 110, 249, 0.4);
+}
+
+@keyframes trackFlow {
+  0% { transform: translateX(0); }
+  100% { transform: translateX(100px); }
+}
+
+/* Enhanced Racer Styling */
+.racer { 
+  position: absolute; 
+  left: 150px; /* Starting position after the label area */
+  width: 60px; 
+  height: 45px; 
+  background: linear-gradient(45deg, var(--monad-purple), var(--monad-blue));
+  border-radius: 20px 8px 8px 20px;
+  transition: none; /* Remove transition to allow smooth manual movement */
+  z-index: 10;
+  box-shadow: 
+    0 0 30px rgba(131, 110, 249, 0.8),
+    inset 0 3px 0 rgba(255, 255, 255, 0.4),
+    inset 0 -3px 0 rgba(0, 0, 0, 0.3);
+  animation: racerGlow 2s ease-in-out infinite alternate;
+  transform: translateX(0px); /* Ensure transform is not overridden */
+  border: 2px solid rgba(255, 255, 255, 0.3);
+}
+
+/* Add a race car emoji or icon to each racer */
+.racer::before {
+  content: "🏎️";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 24px;
+  z-index: 11;
+  text-shadow: 0 0 10px rgba(255, 255, 255, 0.8);
+}
+
+/* Remove the old white dots */
+.racer::after {
+  display: none;
+}
+
+@keyframes racerGlow {
+  0% { 
+    box-shadow: 
+      0 0 20px rgba(131, 110, 249, 0.6),
+      inset 0 2px 0 rgba(255, 255, 255, 0.3),
+      inset 0 -2px 0 rgba(0, 0, 0, 0.2);
+  }
+  100% { 
+    box-shadow: 
+      0 0 30px rgba(131, 110, 249, 0.9),
+      inset 0 2px 0 rgba(255, 255, 255, 0.4),
+      inset 0 -2px 0 rgba(0, 0, 0, 0.3);
+  }
+}
+
+/* Lane Labels - Fixed on Left */
+.lane-label { 
+  position: absolute; 
+  left: 15px; 
+  width: 120px;
+  text-align: left;
+  font-size: 0.85rem; 
+  font-weight: 600; 
+  color: var(--monad-off-white);
+  text-shadow: 0 0 10px rgba(131, 110, 249, 0.8);
+  z-index: 5;
+  background: linear-gradient(90deg,
+    rgba(131, 110, 249, 0.3) 0%,
+    rgba(131, 110, 249, 0.1) 70%,
+    transparent 100%
+  );
+  padding: 8px 12px;
+  border-radius: 8px 0 0 8px;
+  border: 1px solid rgba(131, 110, 249, 0.4);
+  border-right: none;
+  backdrop-filter: blur(5px);
+}
+
+/* Finish Line */
+.finish-line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  background: linear-gradient(to bottom,
+    #ff0000 0%,
+    #ff6600 25%,
+    #ffff00 50%,
+    #ff6600 75%,
+    #ff0000 100%
+  );
+  box-shadow: 
+    0 0 20px rgba(255, 0, 0, 0.8),
+    inset 0 0 10px rgba(255, 255, 255, 0.3);
+  z-index: 15;
+  animation: finishLineGlow 1.5s ease-in-out infinite alternate;
+}
+
+.finish-line::before {
+  content: '🏁';
+  position: absolute;
+  top: -30px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 1.5rem;
+  text-shadow: 0 0 10px rgba(255, 255, 255, 0.8);
+  animation: finishFlag 2s ease-in-out infinite;
+}
+
+@keyframes finishLineGlow {
+  0% { 
+    box-shadow: 
+      0 0 20px rgba(255, 0, 0, 0.8),
+      inset 0 0 10px rgba(255, 255, 255, 0.3);
+  }
+  100% { 
+    box-shadow: 
+      0 0 40px rgba(255, 0, 0, 1),
+      inset 0 0 15px rgba(255, 255, 255, 0.5);
+  }
+}
+
+@keyframes finishFlag {
+  0%, 100% { transform: translateX(-50%) rotate(-5deg); }
+  50% { transform: translateX(-50%) rotate(5deg); }
+}
 .modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.5); backdrop-filter: blur(10px); display: none; justify-content: center; align-items: center; z-index: 1000; }
 .modal-overlay.active { display: flex; }
 .modal { width: 90%; max-width: 500px; max-height: 80vh; overflow-y: auto; padding: 2rem; }

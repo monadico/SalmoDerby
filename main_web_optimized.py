@@ -16,6 +16,7 @@ from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from hypersync import BlockField, TransactionField, TransactionSelection, ClientConfig, Query, FieldSelection
 from dotenv import load_dotenv
+from pydantic import BaseModel
 
 # --- Configuration ---
 load_dotenv()
@@ -40,8 +41,22 @@ DEX_CONTRACTS = {
     "Uniswap": "0x3aE6D8A282D67893e17AA70ebFFb33EE5aa65893",
 }
 
+# This will now be our dynamic configuration, initialized with the defaults.
+# The structure is { "entityName": ["0xaddress1", "0xaddress2", ...], ... }
+DERBY_TRACKER_CONFIG: Dict[str, List[str]] = {
+    name: [address] for name, address in DEX_CONTRACTS.items()
+}
+
+# --- Pydantic Models for API ---
+class DerbyEntity(BaseModel):
+    name: str
+    addresses: List[str]
+
+class UpdateDerbyConfigRequest(BaseModel):
+    entities: List[DerbyEntity]
+
 # --- Global State & Application Lifespan ---
-app_state: Dict[str, Any] = {"hypersync_client": None}
+app_state: Dict[str, Any] = {"hypersync_client": None, "derby_connections": set()}
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -146,64 +161,123 @@ async def cityscape_stream_generator(request: Request) -> AsyncGenerator[str, No
 # ==========================================================
 async def derby_stream_generator(request: Request) -> AsyncGenerator[str, None]:
     hypersync_client = app_state["hypersync_client"]
-    dex_tx_timestamps = {dex_name: deque() for dex_name in DEX_CONTRACTS}
-    address_to_dex = {v.lower(): k for k, v in DEX_CONTRACTS.items()}
+    
+    # Register this connection
+    connection_id = id(request)
+    app_state["derby_connections"].add(connection_id)
+    
+    last_config_check = 0
+    CONFIG_CHECK_INTERVAL = 10  # Check for config changes every 10 seconds
     
     try:
-        start_block = max(0, await hypersync_client.get_height() - 50)
-    except Exception as e:
-        print_red(f"DERBY ERROR: Failed to get initial block height: {e}"); return
-
-    query = Query(
-        from_block=start_block,
-        transactions=[TransactionSelection(to=list(DEX_CONTRACTS.values()))],
-        field_selection=FieldSelection(
-            block=[BlockField.NUMBER, BlockField.TIMESTAMP],
-            transaction=[TransactionField.TO, TransactionField.BLOCK_NUMBER]
-        )
-    )
-    print_info("DERBY", f"Starting tracker from block {start_block}")
-
-    while True:
-        try:
-            if await request.is_disconnected():
-                print_yellow("Derby client disconnected."); break
+        while True:
+            # Periodically refresh the configuration
+            current_time = time.time()
+            if current_time - last_config_check > CONFIG_CHECK_INTERVAL:
+                current_config = DERBY_TRACKER_CONFIG.copy()
+                last_config_check = current_time
+                print_info("DERBY", f"Refreshed config. Now tracking: {list(current_config.keys())}")
+            else:
+                # Use the existing config for this iteration
+                if 'current_config' not in locals():
+                    current_config = DERBY_TRACKER_CONFIG.copy()
             
-            response = await hypersync_client.get(query)
+            all_addresses = [addr for entity_addrs in current_config.values() for addr in entity_addrs]
+            address_to_dex = {addr.lower(): name for name, addrs in current_config.items() for addr in addrs}
             
-            latest_block_time = int(time.time())
-            if response.data and response.data.blocks:
-                timestamps_in_batch = [int(b.timestamp, 16) for b in response.data.blocks if b.timestamp]
-                if timestamps_in_batch: latest_block_time = max(timestamps_in_batch)
+            # No need for persistent timestamp tracking - we calculate TPS from each batch
+
+            if not all_addresses:
+                print_yellow("DERBY WARNING: No addresses to track. Stream will yield empty updates.")
+                if await request.is_disconnected(): 
+                    break
+                yield f"data: {json.dumps({})}\\n\\n"
+                await asyncio.sleep(DERBY_POLLING_INTERVAL)
+                continue
+
+            try:
+                current_height = await hypersync_client.get_height()
+                # Use a smaller window to avoid double-counting transactions
+                # Get only the last ~4 seconds of blocks (about 8 blocks at 0.5s per block)
+                start_block = max(0, current_height - 8)
+            except Exception as e:
+                print_red(f"DERBY ERROR: Failed to get initial block height: {e}")
+                await asyncio.sleep(ERROR_RETRY_DELAY_SECONDS)
+                continue
+
+            query = Query(
+                from_block=start_block,
+                to_block=current_height + 1,  # Make it inclusive
+                transactions=[TransactionSelection(to=all_addresses)],
+                field_selection=FieldSelection(
+                    block=[BlockField.NUMBER, BlockField.TIMESTAMP],
+                    transaction=[TransactionField.TO, TransactionField.BLOCK_NUMBER]
+                )
+            )
+
+            try:
+                if await request.is_disconnected():
+                    print_yellow("Derby client disconnected."); break
                 
-                block_timestamp_map = {b.number: int(b.timestamp, 16) for b in response.data.blocks if b.number and b.timestamp}
+                response = await hypersync_client.get(query)
+                
+                payload = {}
+                # Initialize all entities with 0 TPS
+                for dex_name in current_config.keys():
+                    payload[dex_name] = {"tps": 0.0}
+                
+                if response.data and response.data.transactions and response.data.blocks:
+                    # Count transactions in this specific batch for each DEX
+                    current_batch_counts = {}
+                    for dex_name in current_config.keys():
+                        current_batch_counts[dex_name] = 0
+                    
+                    block_timestamp_map = {b.number: int(b.timestamp, 16) for b in response.data.blocks if b.number and b.timestamp}
+                    
+                    # Count transactions to each DEX in this batch
+                    for tx in response.data.transactions:
+                        if tx.to and tx.block_number in block_timestamp_map:
+                            dex_name = address_to_dex.get(tx.to.lower())
+                            if dex_name:
+                                current_batch_counts[dex_name] += 1
+                    
+                    # Calculate time span of this batch
+                    if response.data.blocks and len(response.data.blocks) > 0:
+                        timestamps = [int(b.timestamp, 16) for b in response.data.blocks if b.timestamp]
+                        if len(timestamps) > 1:
+                            time_span = max(timestamps) - min(timestamps)
+                            if time_span > 0:
+                                # Calculate TPS for this batch: transactions / time_span
+                                for dex_name in current_config.keys():
+                                    tx_count = current_batch_counts[dex_name]
+                                    tps = tx_count / time_span
+                                    payload[dex_name] = {"tps": tps}
+                            else:
+                                # All transactions in same second, use count as rate
+                                for dex_name in current_config.keys():
+                                    payload[dex_name] = {"tps": float(current_batch_counts[dex_name])}
+                        else:
+                            # Single block, use transaction count as approximation
+                            for dex_name in current_config.keys():
+                                payload[dex_name] = {"tps": float(current_batch_counts[dex_name])}
+                
+                # This will print the report for the entities in this specific connection
+                print_derby_update(payload, list(current_config.keys()))
+                yield f"data: {json.dumps(payload)}\n\n"
 
-                for tx in response.data.transactions:
-                    if tx.to and tx.block_number in block_timestamp_map:
-                        dex_name = address_to_dex.get(tx.to.lower())
-                        if dex_name:
-                            dex_tx_timestamps[dex_name].append(block_timestamp_map[tx.block_number])
-            
-            payload = {}
-            for dex_name, timestamps in dex_tx_timestamps.items():
-                while timestamps and timestamps[0] < latest_block_time - TPS_MEMORY_SECONDS:
-                    timestamps.popleft()
-                payload[dex_name] = {"tps": len(timestamps) / TPS_MEMORY_SECONDS if TPS_MEMORY_SECONDS > 0 else 0}
-            
-            print_derby_update(payload)
-            yield f"data: {json.dumps(payload)}\n\n"
+                # Don't use response.next_block - always query recent blocks
+                
+                await asyncio.sleep(DERBY_POLLING_INTERVAL)
+            except Exception as e:
+                print_red(f"DERBY ERROR: {e}"); await asyncio.sleep(ERROR_RETRY_DELAY_SECONDS)
+    finally:
+        app_state["derby_connections"].discard(connection_id)
 
-            if response.next_block:
-                query.from_block = response.next_block
-            
-            await asyncio.sleep(DERBY_POLLING_INTERVAL)
-        except Exception as e:
-            print_red(f"DERBY ERROR: {e}"); await asyncio.sleep(ERROR_RETRY_DELAY_SECONDS)
-
-def print_derby_update(payload: dict):
+def print_derby_update(payload: dict, entity_names: List[str]):
     report = "\n" + "="*60 + "\n--- PERPETUAL MONAD DERBY (Live Terminal View) ---\n"
     total_tps = 0
-    for dex_name in sorted(DEX_CONTRACTS.keys()):
+    # Sort by the provided entity names to maintain order
+    for dex_name in sorted(entity_names):
         data = payload.get(dex_name, {"tps": 0})
         tps = data["tps"]
         report += f"{dex_name:<20}: {tps:.2f} TPS\n"; total_tps += tps
@@ -211,8 +285,30 @@ def print_derby_update(payload: dict):
     print_green(report)
 
 # ==========================================================
-# === FastAPI Endpoints (UNCHANGED)
+# === FastAPI Endpoints
 # ==========================================================
+@app.post("/update-derby-config")
+async def update_derby_config(config_request: UpdateDerbyConfigRequest):
+    global DERBY_TRACKER_CONFIG
+    
+    new_config = {entity.name: entity.addresses for entity in config_request.entities}
+    
+    if not new_config:
+        print_yellow("DERBY_CONFIG: Received empty config. Resetting to default DEX contracts.")
+        DERBY_TRACKER_CONFIG = {name: [address] for name, address in DEX_CONTRACTS.items()}
+    else:
+        DERBY_TRACKER_CONFIG = new_config
+
+    print_info("DERBY_CONFIG", f"Updated Derby tracker config. Now tracking {len(DERBY_TRACKER_CONFIG)} entities.")
+    # You might want to add validation for addresses here in a real application
+    print_cyan(json.dumps(DERBY_TRACKER_CONFIG, indent=2))
+
+    return {"status": "success", "message": "Derby configuration updated."}
+
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy", "service": "monad-visualizer"}
+
 @app.get("/firehose-stream")
 async def firehose_stream_endpoint(request: Request):
     return StreamingResponse(cityscape_stream_generator(request), media_type="text/event-stream")

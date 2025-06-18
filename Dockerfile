@@ -84,8 +84,7 @@ COPY main_web_optimized.py ./
 EXPOSE 8000 
 
 # --- Default command to run the application ---
-# This command will be executed when the container starts if Render's "Start Command" UI field is blank.
-# It uses 'sh -c' and provides a default for $PORT if it's unset or empty.
-# Render typically uses port 10000 for services.
-# ***** ENSURING THIS MATCHES THE ERROR LOG *****
-CMD sh -c 'uvicorn main_web_optimized:app --host 0.0.0.0 --port "${PORT:-10000}"'
+# This command will be executed when the container starts.
+# Render provides the PORT environment variable dynamically.
+# Using 0.0.0.0 to bind to all interfaces for Docker deployment.
+CMD sh -c 'uvicorn main_web_optimized:app --host 0.0.0.0 --port "${PORT:-8000}"'

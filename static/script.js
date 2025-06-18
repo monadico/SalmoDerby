@@ -18,12 +18,23 @@ class MonadVisualizer {
 
     // --- Derby State ---
     this.derbyConfig = {
-      // This list will eventually be configurable via the modal.
-      // For now, it mirrors the default backend entities.
-      entities: [ "LFJ", "PancakeSwap", "Bean Exchange", "Ambient Finance", "Izumi Finance", "Octoswap", "Uniswap" ],
+      // This list will be configurable via the modal.
+      // Structure: { "Entity Name": ["0xaddress1", "0xaddress2"], ... }
+      racers: {
+        "LFJ": ["0x45A62B090DF48243F12A21897e7ed91863E2c86b"],
+        "PancakeSwap": ["0x94D220C58A23AE0c2eE29344b00A30D1c2d9F1bc"],
+        "Bean Exchange": ["0xCa810D095e90Daae6e867c19DF6D9A8C56db2c89"],
+        "Ambient Finance": ["0x88B96aF200c8a9c35442C8AC6cd3D22695AaE4F0"],
+        "Izumi Finance": ["0xf6ffe4f3fdc8bbb7f70ffd48e61f17d1e343ddfd"],
+        "Octoswap": ["0xb6091233aAcACbA45225a2B2121BBaC807aF4255"],
+        "Uniswap": ["0x3aE6D8A282D67893e17AA70ebFFb33EE5aa65893"]
+      },
     };
     this.racerData = {}; // To store latest TPS data { name: { tps: 0 } }
     this.racerProgress = {}; // To store visual progress { name: 0 }
+    this.racerWins = {}; // To store win counts { name: 0 }
+    this.raceFinishLine = 0; // Will be set dynamically based on racetrack width
+    this.raceInProgress = true;
     this.numGridLines = 10;
     
     this.init();
@@ -199,127 +210,461 @@ class MonadVisualizer {
   // --- Derby Methods ---
   
   initializeDerby() {
-    this.derbyConfig.entities.forEach(name => {
-      this.racerData[name] = { tps: 0 };
-      this.racerProgress[name] = 0;
+    console.log("Initializing Derby with current config...");
+    
+    // Initialize win counts for all racers
+    Object.keys(this.derbyConfig.racers).forEach(name => {
+        if (!this.racerWins[name]) {
+            this.racerWins[name] = 0;
+        }
+        if (!this.racerProgress[name]) {
+            this.racerProgress[name] = 0;
+        }
     });
+    
     this.setupRacetrack();
     this.updateScoreboard();
-    this.updateCurrentEntities(); // For the modal
+    // No stream connection here, it's handled by tab switching or applying config
   }
 
   updateDerbyUI() {
+    if (!this.racerData) {
+      console.log("No racer data available");
+      return;
+    }
+    console.log("Derby UI update - Racer data:", this.racerData);
+    console.log("Derby UI update - Current racers config:", Object.keys(this.derbyConfig.racers));
+    this.updateRacerProgress();
     this.updateScoreboard();
-    
+  }
+
+  updateRacerProgress() {
+    const racetrack = document.getElementById('racetrack');
+    if (!racetrack) {
+        console.error("❌ Racetrack not found in updateRacerProgress");
+        return;
+    }
+
     let someoneFinished = false;
-    const movementScale = 1; // Adjust to make the race faster or slower
+    let winners = [];
+    let debugInfo = [];
 
-    this.derbyConfig.entities.forEach(name => {
-      const tps = this.racerData[name]?.tps || 0;
-      this.racerProgress[name] += tps * movementScale;
-      
-      const racerElement = document.querySelector(`.racer[data-entity="${name}"]`);
-      if (racerElement) {
-        // Cap progress at 95% to prevent the racer from going off-screen
-        const displayProgress = Math.min(this.racerProgress[name], 95);
-        racerElement.style.left = `${displayProgress}%`;
-      }
+    Object.keys(this.derbyConfig.racers).forEach(name => {
+        const tps = this.racerData[name] ? this.racerData[name].tps : 0;
+        const currentProgress = this.racerProgress[name] || 0;
+        
+        // The movement increment is now based on TPS. Adjust the factor for good visual speed.
+        const movement = tps * 15; 
+        this.racerProgress[name] = currentProgress + movement;
 
-      if (this.racerProgress[name] >= 100) {
-        someoneFinished = true;
-      }
+        // Check if this racer finished the race
+        if (this.racerProgress[name] >= this.raceFinishLine) {
+            someoneFinished = true;
+            winners.push(name);
+            // Initialize win count if not exists
+            if (!this.racerWins[name]) {
+                this.racerWins[name] = 0;
+            }
+            this.racerWins[name]++;
+            console.log(`🏆 ${name} wins! Total wins: ${this.racerWins[name]}`);
+        }
+
+        const racerElement = racetrack.querySelector(`.racer[data-name="${name}"]`);
+        if (racerElement) {
+            // Use left position instead of transform for better visibility
+            const startPosition = 150; // Starting position after labels
+            const newPosition = startPosition + this.racerProgress[name];
+            racerElement.style.left = `${newPosition}px`;
+            
+            debugInfo.push({
+                name: name,
+                tps: tps.toFixed(2),
+                progress: this.racerProgress[name].toFixed(1),
+                position: newPosition.toFixed(1),
+                element: !!racerElement
+            });
+        } else {
+            console.warn(`❌ Racer element not found for ${name}`);
+            debugInfo.push({
+                name: name,
+                tps: tps.toFixed(2),
+                progress: this.racerProgress[name].toFixed(1),
+                position: 'N/A',
+                element: false
+            });
+        }
     });
 
+    // Log debug info every few updates (to avoid spam)
+    if (Math.random() < 0.1) { // 10% chance to log
+        console.table(debugInfo);
+    }
+
+    // Reset race if someone finished
     if (someoneFinished) {
-      console.log("A lap has finished! Resetting race.");
-      // Reset progress for the next lap
-      this.derbyConfig.entities.forEach(name => {
-        this.racerProgress[name] = 0;
-      });
+        console.log(`🏁 Race finished! Winners: ${winners.join(', ')}`);
+        this.resetRace();
     }
   }
 
   updateScoreboard() {
-    const container = document.getElementById('scoreboardContent');
-    if (!container) return;
+    const scoreboard = document.getElementById('scoreboardContent');
+    if (!scoreboard) return;
+    
+    // Create an array from the racer data to sort it
+    const sortedRacers = Object.keys(this.derbyConfig.racers).map(name => ({
+        name: name,
+        tps: this.racerData[name] ? this.racerData[name].tps : 0,
+        wins: this.racerWins[name] || 0,
+        progress: this.racerProgress[name] || 0
+    })).sort((a, b) => b.tps - a.tps);
 
-    // Sort entities by TPS, descending
-    const sortedEntities = this.derbyConfig.entities
-      .map(name => ({ name, tps: this.racerData[name]?.tps || 0 }))
-      .sort((a, b) => b.tps - a.tps);
-
-    container.innerHTML = ''; // Clear previous state
-    sortedEntities.forEach(entity => {
-      const card = document.createElement('div');
-      card.className = 'racer-card';
-      card.innerHTML = `
-        <div class="racer-name">${entity.name}</div>
-        <div class="racer-stats">
-          <span>TPS:</span>
-          <span>${entity.tps.toFixed(2)}</span>
-        </div>
-      `;
-      container.appendChild(card);
+    scoreboard.innerHTML = ''; // Clear previous entries
+    sortedRacers.forEach((racer, index) => {
+        const scoreItem = document.createElement('div');
+        scoreItem.className = 'scoreboard-item';
+        const progressPercent = ((racer.progress / this.raceFinishLine) * 100).toFixed(1);
+        scoreItem.innerHTML = `
+            <div class="rank">${index + 1}</div>
+            <div class="racer-name">${racer.name}</div>
+            <div class="racer-stats">
+                <div class="racer-tps">${racer.tps.toFixed(2)} TPS</div>
+                <div class="racer-wins">🏆 ${racer.wins}</div>
+                <div class="racer-progress">${progressPercent}%</div>
+            </div>
+        `;
+        scoreboard.appendChild(scoreItem);
     });
   }
 
-  setupRacetrack() {
-    const track = document.getElementById('racetrack');
-    if (!track) return;
-    track.innerHTML = '';
-    this.derbyConfig.entities.forEach((entity) => {
-      const lane = document.createElement('div');
-      lane.className = 'race-lane';
-      lane.innerHTML = `
-        <div class="lane-background"></div>
-        <div class="racer" data-entity="${entity}"></div>
-        <div class="lane-label">${entity}</div>
-      `;
-      track.appendChild(lane);
+  resetRace() {
+    console.log("🔄 Resetting race - all horses back to starting line!");
+    
+    // Reset all progress to 0
+    Object.keys(this.derbyConfig.racers).forEach(name => {
+        this.racerProgress[name] = 0;
+        
+        // Reset visual position
+        const racerElement = document.querySelector(`.racer[data-name="${name}"]`);
+        if (racerElement) {
+            racerElement.style.left = `150px`; // Back to starting position
+        }
     });
+    
+    // Update scoreboard to reflect reset
+    this.updateScoreboard();
+  }
+
+  setupRacetrack() {
+    const racetrack = document.getElementById('racetrack');
+    if (!racetrack) {
+        console.error("❌ Racetrack element not found!");
+        return;
+    }
+
+    console.log("🏁 Setting up racetrack...");
+    racetrack.innerHTML = ''; // Clear existing racers
+    this.racerProgress = {}; // Reset progress
+
+    // Calculate finish line based on racetrack width
+    // Leave some margin (100px) so horses don't go completely off-screen
+    this.raceFinishLine = racetrack.clientWidth - 250; // Account for starting position (150px) + margin (100px)
+    console.log(`🏁 Finish line set to ${this.raceFinishLine}px (racetrack width: ${racetrack.clientWidth}px)`);
+
+    // Add visual finish line
+    const existingFinishLine = racetrack.querySelector('.finish-line');
+    if (existingFinishLine) {
+        existingFinishLine.remove();
+    }
+    
+    const finishLine = document.createElement('div');
+    finishLine.className = 'finish-line';
+    finishLine.style.left = `${150 + this.raceFinishLine}px`; // Position at actual finish
+    racetrack.appendChild(finishLine);
+    console.log("🏁 Finish line created and positioned");
+
+    const racerNames = Object.keys(this.derbyConfig.racers);
+    console.log(`🏎️ Creating ${racerNames.length} racers:`, racerNames);
+
+    racerNames.forEach((name, index) => {
+        const laneY = index * 60 + 20; // More space between lanes (60px instead of 50px)
+        
+        // Create the racer element
+        const racer = document.createElement('div');
+        racer.className = 'racer';
+        racer.dataset.name = name;
+        racer.style.top = `${laneY}px`;
+        racer.style.left = '150px'; // Ensure starting position is set
+        
+        // Create the lane label (stays on the left)
+        const laneLabel = document.createElement('div');
+        laneLabel.className = 'lane-label';
+        laneLabel.textContent = name;
+        laneLabel.style.top = `${laneY}px`;
+        laneLabel.style.left = '10px'; // Fixed position on the left
+        
+        // Create the racing lane background
+        const lane = document.createElement('div');
+        lane.className = 'racing-lane';
+        lane.style.top = `${laneY - 5}px`; // Slightly above racer for background
+        lane.style.height = '50px';
+        lane.dataset.lane = index;
+        
+        racetrack.appendChild(lane);
+        racetrack.appendChild(laneLabel);
+        racetrack.appendChild(racer);
+        
+        console.log(`🏎️ Created racer "${name}" at lane ${index}, position (150px, ${laneY}px)`);
+    });
+    
+    console.log(`✅ Racetrack setup complete! Total elements in racetrack: ${racetrack.children.length}`);
   }
 
   // --- Tab Management ---
 
   switchTab(tabName) {
+    if (this.currentTab === tabName) return;
     this.currentTab = tabName;
-    this.closeStreams(); // Close all active streams before switching
+    console.log(`Switched to ${tabName} tab.`);
 
-    document.querySelectorAll('.tab-button').forEach(button => {
-      button.classList.toggle('active', button.dataset.tab === tabName);
-    });
-    document.querySelectorAll('.page').forEach(page => {
-      page.classList.toggle('active', page.id === tabName);
-    });
+    document.querySelectorAll('.page').forEach(page => page.classList.remove('active'));
+    document.getElementById(tabName)?.classList.add('active');
+
+    document.querySelectorAll('.tab-button').forEach(btn => btn.classList.remove('active'));
+    document.querySelector(`.tab-button[data-tab="${tabName}"]`)?.classList.add('active');
     
-    // Connect to the appropriate stream for the new tab
+    this.closeStreams();
+
     if (tabName === 'cityscape') {
-      this.connectToStream();
+        this.connectToStream();
     } else if (tabName === 'derby') {
-      this.connectToDerbyStream();
+        this.initializeDerby();
+        this.connectToDerbyStream();
+    } else {
+      // Handle other tabs like dashboard if they need specific connections
     }
   }
 
-  // --- Modal & Config Methods (Placeholders for now) ---
-  updateCurrentEntities(){ const container = document.getElementById('currentEntities'); if (!container) return; container.innerHTML = ''; this.derbyConfig.entities.forEach(entity => { const tag = document.createElement('div'); tag.className = 'entity-tag'; tag.innerHTML = `${entity} <button class="remove-btn" data-entity="${entity}">×</button>`; container.appendChild(tag); }); container.querySelectorAll('.remove-btn').forEach(btn => { btn.addEventListener('click', () => this.removeEntity(btn.dataset.entity)); }); }
-  removeEntity(entityName){ this.derbyConfig.entities = this.derbyConfig.entities.filter(e => e !== entityName); this.updateCurrentEntities(); }
-  addEntity(){ const nameInput = document.getElementById('entityName'); const addressesInput = document.getElementById('entityAddresses'); if (!nameInput || !addressesInput) return; const name = nameInput.value.trim(); const addresses = addressesInput.value.trim(); if (name && addresses) { if (!this.derbyConfig.entities.includes(name)) { this.derbyConfig.entities.push(name); this.updateCurrentEntities(); } nameInput.value = ''; addressesInput.value = ''; } }
-  openConfigModal(){ const modal = document.getElementById('configModal'); if (modal) modal.classList.add('active'); }
-  closeConfigModal(){ const modal = document.getElementById('configModal'); if (modal) modal.classList.remove('active'); }
-  applyConfiguration(){ this.initializeDerby(); this.closeConfigModal(); }
-  resetConfiguration(){ this.derbyConfig.entities = [ "LFJ", "PancakeSwap", "Bean Exchange", "Ambient Finance", "Izumi Finance", "Octoswap", "Uniswap" ]; this.initializeDerby(); }
-  setupEventListeners() {
-    document.querySelectorAll('.tab-button').forEach(button => {
-      button.addEventListener('click', () => {
-        this.switchTab(button.dataset.tab);
-      });
+  // --- Derby Configuration Modal Methods ---
+
+  updateCurrentEntities() {
+    const container = document.getElementById('currentEntities');
+    if (!container) return;
+
+    container.innerHTML = '';
+    Object.keys(this.derbyConfig.racers).forEach(name => {
+        const tag = document.createElement('div');
+        tag.className = 'entity-tag';
+        tag.innerHTML = `${name} <button class="remove-btn" data-entity="${name}">×</button>`;
+        container.appendChild(tag);
     });
 
-    document.getElementById('configButton')?.addEventListener('click', () => this.openConfigModal());
-    document.getElementById('closeModal')?.addEventListener('click', () => this.closeConfigModal());
-    document.getElementById('addEntity')?.addEventListener('click', () => this.addEntity());
-    document.getElementById('applyConfig')?.addEventListener('click', () => this.applyConfiguration());
-    document.getElementById('resetConfig')?.addEventListener('click', () => this.resetConfiguration());
+    container.querySelectorAll('.remove-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation(); // Prevent modal from closing
+            this.removeEntity(btn.dataset.entity);
+        });
+    });
+  }
+
+  removeEntity(entityName) {
+    delete this.derbyConfig.racers[entityName];
+    this.updateCurrentEntities();
+  }
+
+  addEntity() {
+    console.log("addEntity() called");
+    const nameInput = document.getElementById('entityName');
+    const addressesInput = document.getElementById('entityAddresses');
+    
+    if (!nameInput) {
+        console.error("entityName input not found");
+        return;
+    }
+    if (!addressesInput) {
+        console.error("entityAddresses input not found");
+        return;
+    }
+
+    const name = nameInput.value.trim();
+    const addressInput = addressesInput.value.trim();
+    
+    console.log("Name:", name);
+    console.log("Address input:", addressInput);
+
+    if (!name) {
+        alert("Please provide an entity name.");
+        return;
+    }
+
+    if (!addressInput) {
+        alert("Please provide at least one address.");
+        return;
+    }
+
+    // Split by comma, trim whitespace, and filter out empty strings
+    const addresses = addressInput.split(',')
+        .map(addr => addr.trim())
+        .filter(addr => addr.length > 0); // More permissive validation for testing
+
+    console.log("Parsed addresses:", addresses);
+
+    if (addresses.length === 0) {
+        alert("Please provide valid addresses (comma-separated if multiple).");
+        return;
+    }
+
+    if (this.derbyConfig.racers[name]) {
+        console.warn(`Entity ${name} already exists. Overwriting addresses.`);
+    }
+    
+    this.derbyConfig.racers[name] = addresses;
+    console.log("Updated racers config:", this.derbyConfig.racers);
+    
+    this.updateCurrentEntities();
+    nameInput.value = '';
+    addressesInput.value = '';
+    
+    console.log("Entity added successfully");
+  }
+
+  openConfigModal() {
+    const modal = document.getElementById('configModal');
+    if (modal) {
+        this.updateCurrentEntities(); // Make sure the list is up-to-date when opening
+        modal.classList.add('active');
+    }
+  }
+
+  closeConfigModal() {
+    const modal = document.getElementById('configModal');
+    if (modal) modal.classList.remove('active');
+  }
+
+  async applyConfiguration() {
+    console.log("Applying new Derby configuration...");
+
+    const entitiesPayload = Object.keys(this.derbyConfig.racers).map(name => ({
+        name: name,
+        addresses: this.derbyConfig.racers[name]
+    }));
+
+    try {
+        const response = await fetch('http://localhost:8000/update-derby-config', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ entities: entitiesPayload })
+        });
+
+        if (!response.ok) {
+            throw new Error(`Failed to update config: ${response.statusText}`);
+        }
+
+        const result = await response.json();
+        console.log("Backend response:", result.message);
+        
+        this.closeConfigModal();
+        
+        // Reset all progress when configuration changes to ensure fair start
+        this.resetRace();
+        
+        // Initialize win counts for new entities
+        Object.keys(this.derbyConfig.racers).forEach(name => {
+            if (!this.racerWins[name]) {
+                this.racerWins[name] = 0;
+            }
+        });
+        
+        // Re-initialize the derby with the new settings and reconnect the stream
+        if (this.currentTab === 'derby') {
+            this.initializeDerby();
+        }
+
+    } catch (error) {
+        console.error("Error applying configuration:", error);
+        alert("Could not apply the new configuration. Please check the console for details.");
+    }
+  }
+
+  resetConfiguration() {
+    console.log("Resetting Derby configuration to default.");
+    // This now just resets the local config.
+    // applyConfiguration must be called to send it to the backend.
+    this.derbyConfig.racers = {
+      "LFJ": ["0x45A62B090DF48243F12A21897e7ed91863E2c86b"],
+      "PancakeSwap": ["0x94D220C58A23AE0c2eE29344b00A30D1c2d9F1bc"],
+      "Bean Exchange": ["0xCa810D095e90Daae6e867c19DF6D9A8C56db2c89"],
+      "Ambient Finance": ["0x88B96aF200c8a9c35442C8AC6cd3D22695AaE4F0"],
+      "Izumi Finance": ["0xf6ffe4f3fdc8bbb7f70ffd48e61f17d1e343ddfd"],
+      "Octoswap": ["0xb6091233aAcACbA45225a2B2121BBaC807aF4255"],
+      "Uniswap": ["0x3aE6D8A282D67893e17AA70ebFFb33EE5aa65893"]
+    };
+    this.updateCurrentEntities(); // Update the UI in the modal
+    // We don't auto-apply, user must click "Apply Configuration"
+  }
+
+  setupEventListeners() {
+    document.querySelectorAll('.tab-button').forEach(button => {
+        button.addEventListener('click', () => this.switchTab(button.dataset.tab));
+    });
+
+    // --- Derby Modal Listeners ---
+    const configButton = document.getElementById('configButton');
+    const closeModal = document.getElementById('closeModal');
+    const addEntityButton = document.getElementById('addEntity');
+    const applyConfigButton = document.getElementById('applyConfig');
+    const resetConfigButton = document.getElementById('resetConfig');
+
+    if (configButton) {
+        configButton.addEventListener('click', () => this.openConfigModal());
+        console.log("Config button event listener added");
+    } else {
+        console.error("configButton not found");
+    }
+
+    if (closeModal) {
+        closeModal.addEventListener('click', () => this.closeConfigModal());
+        console.log("Close modal event listener added");
+    } else {
+        console.error("closeModal button not found");
+    }
+
+    if (addEntityButton) {
+        addEntityButton.addEventListener('click', () => {
+            console.log("Add entity button clicked");
+            this.addEntity();
+        });
+        console.log("Add entity button event listener added");
+    } else {
+        console.error("addEntity button not found");
+    }
+
+    if (applyConfigButton) {
+        applyConfigButton.addEventListener('click', () => this.applyConfiguration());
+        console.log("Apply config button event listener added");
+    } else {
+        console.error("applyConfig button not found");
+    }
+
+    if (resetConfigButton) {
+        resetConfigButton.addEventListener('click', () => this.resetConfiguration());
+        console.log("Reset config button event listener added");
+    } else {
+        console.error("resetConfig button not found");
+    }
+    
+    window.addEventListener('resize', () => {
+        if (this.currentTab === 'cityscape') {
+            this.setupGridLines();
+        } else if (this.currentTab === 'derby') {
+            // Recalculate finish line when window is resized
+            const racetrack = document.getElementById('racetrack');
+            if (racetrack) {
+                this.raceFinishLine = racetrack.clientWidth - 100;
+                console.log(`🏁 Finish line updated to ${this.raceFinishLine}px due to resize`);
+            }
+        }
+    });
   }
 }
 
